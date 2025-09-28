@@ -6,6 +6,7 @@ use image::{DynamicImage, ImageFormat};
 use mouse_position::mouse_position::Mouse;
 use screenshots::Screen;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
@@ -62,6 +63,88 @@ impl ScreenCapture {
             output_dir,
             current_session: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// 检测系统是否处于锁屏状态
+    /// 在 macOS 上通过检查屏幕保护程序状态和系统锁定状态
+    pub fn is_screen_locked() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            // 方法1：使用 Quartz 检查 CGSessionCopyCurrentDictionary
+            // 当屏幕锁定时，这个命令会返回空
+            if let Ok(output) = Command::new("python3")
+                .arg("-c")
+                .arg("import Quartz; print('locked' if Quartz.CGSessionCopyCurrentDictionary() is None else 'unlocked')")
+                .output()
+            {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    if text.trim() == "locked" {
+                        info!("检测到屏幕锁定（CGSessionCopyCurrentDictionary 为空）");
+                        return true;
+                    }
+                }
+            }
+
+            // 方法2：检查屏幕保护程序是否运行
+            if let Ok(output) = Command::new("pgrep")
+                .arg("-x")
+                .arg("ScreenSaverEngine")
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    info!("检测到屏幕保护程序正在运行");
+                    return true;
+                }
+            }
+
+            // 方法3：检查显示器睡眠状态
+            // 使用 ioreg 检查显示器是否处于睡眠状态
+            if let Ok(output) = Command::new("sh")
+                .arg("-c")
+                .arg("ioreg -n IODisplayWrangler | grep -i 'IOPowerManagement' -A 10 | grep 'CurrentPowerState'")
+                .output()
+            {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    // CurrentPowerState = 4 表示显示器开启
+                    // 其他值（0-3）表示显示器关闭或睡眠
+                    if text.contains("CurrentPowerState") {
+                        // 提取数字
+                        if let Some(pos) = text.find("=") {
+                            let state_str = text[pos+1..].trim();
+                            if let Ok(state) = state_str.parse::<i32>() {
+                                if state < 4 {
+                                    info!("检测到显示器睡眠或关闭（CurrentPowerState = {}）", state);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 方法4：检查系统是否处于登录窗口（备用）
+            if let Ok(output) = Command::new("sh")
+                .arg("-c")
+                .arg("w | grep -c console")
+                .output()
+            {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    // 如果没有用户登录到控制台，可能处于锁屏状态
+                    if text.trim() == "0" {
+                        trace!("可能处于锁屏状态（无控制台用户）");
+                        // 这个方法不太可靠，所以只作为辅助判断
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // 其他平台暂不实现锁屏检测，始终返回 false
+            warn!("当前平台不支持锁屏检测");
+        }
+
+        false
     }
 
     /// 捕获单个帧

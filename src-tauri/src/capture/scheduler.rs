@@ -49,18 +49,28 @@ impl CaptureScheduler {
             info!("截屏任务已启动，间隔: {}秒", interval_secs);
             let mut interval = interval(Duration::from_secs(interval_secs));
 
-            // 立即执行第一次截屏
-            match capture.capture_frame().await {
-                Ok(frame) => {
-                    trace!("初始截屏成功: {}", frame.timestamp);
-                }
-                Err(e) => {
-                    error!("初始截屏失败: {}", e);
+            // 立即执行第一次截屏（检查锁屏状态）
+            if super::ScreenCapture::is_screen_locked() {
+                trace!("系统锁屏中，跳过初始截屏");
+            } else {
+                match capture.capture_frame().await {
+                    Ok(frame) => {
+                        trace!("初始截屏成功: {}", frame.timestamp);
+                    }
+                    Err(e) => {
+                        error!("初始截屏失败: {}", e);
+                    }
                 }
             }
 
             loop {
                 interval.tick().await;
+
+                // 检查锁屏状态
+                if super::ScreenCapture::is_screen_locked() {
+                    info!("系统锁屏中，跳过截屏");
+                    continue;
+                }
 
                 match capture.capture_frame().await {
                     Ok(frame) => {
