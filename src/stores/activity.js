@@ -327,8 +327,12 @@ export const useActivityStore = defineStore('activity', {
     // 获取LLM提供商列表
     async fetchLLMProviders() {
       try {
-        const providers = await invoke('get_llm_providers')
-        this.llmProviders = providers
+        // TODO: 后端需要实现 get_llm_providers 命令
+        // const providers = await invoke('get_llm_providers')
+        // this.llmProviders = providers
+
+        // 临时使用默认提供商列表
+        this.llmProviders = ['openai', 'anthropic', 'deepseek', 'tongyi']
       } catch (error) {
         console.error('Failed to fetch LLM providers:', error)
       }

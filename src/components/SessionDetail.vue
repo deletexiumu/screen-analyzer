@@ -106,7 +106,7 @@
         <!-- 如果有视频，显示视频播放器 -->
         <div v-if="session.session.video_path" class="video-section">
           <h4>会话视频</h4>
-          <div class="video-container">
+          <div class="video-container" v-if="isTauriEnv">
             <video
               ref="videoPlayer"
               :src="videoUrl"
@@ -121,6 +121,16 @@
               您的浏览器不支持视频播放
             </video>
           </div>
+          <el-alert
+            v-else
+            title="视频预览不可用"
+            type="warning"
+            :closable="false"
+            show-icon
+          >
+            视频文件位于：{{ session.session.video_path }}<br>
+            请使用 Tauri 应用查看（运行 npm run tauri dev 或使用打包后的应用）
+          </el-alert>
         </div>
 
         <!-- 如果没有视频，显示帧预览 -->
@@ -231,6 +241,7 @@ const videoPlayer = ref(null)
 const loadingImages = reactive({})
 const isWindows = ref(false)
 const videoUrl = ref(null)
+const isTauriEnv = ref(false)
 
 const dialogVisible = computed({
   get: () => props.modelValue,
@@ -244,10 +255,45 @@ const loadVideoUrl = () => {
   if (!session.value?.session?.video_path) return
 
   try {
-    // 直接使用convertFileSrc转换本地文件路径为Tauri协议URL
-    // 这样视频会通过流式传输，不会一次性加载到内存
-    videoUrl.value = convertFileSrc(session.value.session.video_path)
-    console.log('视频URL:', videoUrl.value)
+    // 检查是否在 Tauri 环境中
+    if (!window.__TAURI__) {
+      console.warn('不在 Tauri 环境中，无法加载本地视频文件')
+      ElMessage.warning('请在 Tauri 应用中查看视频（需要运行 npm run tauri dev）')
+      return
+    }
+
+    let videoPath = session.value.session.video_path
+
+    // Windows 路径处理：确保使用正斜杠
+    if (isWindows.value) {
+      // 将反斜杠替换为正斜杠
+      videoPath = videoPath.replace(/\\/g, '/')
+    }
+
+    // 使用 convertFileSrc 转换路径
+    const convertedUrl = convertFileSrc(videoPath)
+
+    // 对于 Windows，可能需要特殊处理
+    if (isWindows.value && convertedUrl.includes('asset.localhost')) {
+      // Windows 下的特殊处理：确保路径编码正确
+      console.log('原始路径:', videoPath)
+      console.log('转换后URL:', convertedUrl)
+
+      // 如果是绝对路径，尝试使用 file:// 协议作为备选
+      if (videoPath.match(/^[A-Za-z]:\//)) {
+        // 先尝试使用 convertFileSrc 的结果
+        videoUrl.value = convertedUrl
+
+        // 如果加载失败，可以在 handleVideoError 中尝试 file:// 协议
+        videoUrl.value._fallbackPath = 'file:///' + videoPath
+      } else {
+        videoUrl.value = convertedUrl
+      }
+    } else {
+      videoUrl.value = convertedUrl
+    }
+
+    console.log('最终视频URL:', videoUrl.value)
   } catch (error) {
     console.error('转换视频路径失败:', error)
     ElMessage.error('视频路径转换失败：' + error)
@@ -256,7 +302,20 @@ const loadVideoUrl = () => {
 
 // 转换文件路径
 const getConvertedPath = (filePath) => {
-  return filePath ? convertFileSrc(filePath) : '/placeholder.png'
+  if (!filePath) return '/placeholder.png'
+
+  // 检查是否在 Tauri 环境中
+  if (!window.__TAURI__) {
+    // 在纯前端开发模式下，返回占位图
+    return '/placeholder.png'
+  }
+
+  try {
+    return convertFileSrc(filePath)
+  } catch (error) {
+    console.error('转换文件路径失败:', error)
+    return '/placeholder.png'
+  }
 }
 
 // 解析的关键时刻
@@ -433,6 +492,10 @@ const handleImageError = (e, index) => {
 
 // 预览帧
 const previewFrame = (frame) => {
+  if (!window.__TAURI__) {
+    ElMessage.warning('请在 Tauri 应用中查看完整图片')
+    return
+  }
   previewUrl.value = convertFileSrc(frame.file_path)
 }
 
@@ -465,11 +528,40 @@ const retryAnalysis = async () => {
   await store.retrySessionAnalysis(session.value.session.id)
 }
 
+// 处理视频加载开始
+const onVideoLoadStart = () => {
+  console.log('视频开始加载...')
+}
+
+// 处理视频加载完成
+const onVideoLoadedData = () => {
+  console.log('视频数据已加载')
+}
+
 // 处理视频加载错误
 const handleVideoError = (e) => {
   console.error('视频加载失败:', e)
   console.log('视频路径:', session.value?.session?.video_path)
-  ElMessage.error('视频加载失败，请尝试重新生成')
+  console.log('当前视频URL:', videoUrl.value)
+
+  // 在 Windows 下尝试备用方案
+  if (isWindows.value && videoUrl.value?._fallbackPath) {
+    console.log('尝试备用路径:', videoUrl.value._fallbackPath)
+
+    // 尝试直接使用 file:// 协议
+    const fallbackUrl = videoUrl.value._fallbackPath
+    videoUrl.value = fallbackUrl
+
+    // 给第二次加载一个机会
+    setTimeout(() => {
+      if (videoPlayer.value) {
+        videoPlayer.value.load()
+      }
+    }, 100)
+  } else if (window.__TAURI__) {
+    // 其他情况下显示错误消息
+    ElMessage.error('视频加载失败，请尝试重新生成')
+  }
 }
 
 // 播放视频
@@ -491,7 +583,7 @@ watch(() => props.sessionId, async (newId) => {
     await store.fetchSessionDetail(newId)
     // 如果有视频，加载视频
     if (store.selectedSession?.session?.video_path) {
-      await loadVideoAsBlob()
+      loadVideoUrl()
     }
   }
 })
@@ -499,7 +591,7 @@ watch(() => props.sessionId, async (newId) => {
 // 监听会话视频路径变化
 watch(() => session.value?.session?.video_path, async (newPath) => {
   if (newPath) {
-    await loadVideoAsBlob()
+    loadVideoUrl()
   }
 })
 
@@ -510,9 +602,14 @@ watch(sampledFrames, (frames) => {
   })
 }, { immediate: true })
 
-// 检测是否为Windows系统
+// 检测是否为Windows系统和Tauri环境
 onMounted(() => {
   isWindows.value = navigator.platform.toLowerCase().includes('win')
+  isTauriEnv.value = !!window.__TAURI__
+
+  if (!isTauriEnv.value) {
+    console.warn('当前不在 Tauri 环境中，部分功能可能受限')
+  }
 })
 
 // 组件销毁时清理

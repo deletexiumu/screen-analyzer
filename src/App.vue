@@ -249,8 +249,8 @@ const refreshData = async () => {
   console.log('自动刷新数据...')
   // 刷新当天会话列表
   await store.fetchDaySessions(store.selectedDate)
-  // 刷新月度摘要
-  await store.fetchMonthlySummary(dayjs(store.selectedDate).format('YYYY-MM'))
+  // TODO: 刷新月度摘要 - 需要后端实现该API
+  // await store.fetchMonthlySummary(dayjs(store.selectedDate).format('YYYY-MM'))
   // 如果有选中的会话，刷新会话详情
   if (store.selectedSession?.session?.id) {
     await store.fetchSessionDetail(store.selectedSession.session.id)
