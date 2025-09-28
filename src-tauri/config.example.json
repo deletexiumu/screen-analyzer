@@ -1,0 +1,31 @@
+{
+  "llm": {
+    "qwen": {
+      "api_key": "sk-xxxxxxxxxxxx"
+      // model, base_url, use_video_mode 都有默认值
+    },
+    "analysis_params": {
+      "frame_sampling_interval": 30,
+      "max_frames_per_analysis": 15,
+      "include_detailed_description": true,
+      "confidence_threshold": 0.5
+    }
+  },
+  "capture": {
+    "fps": 1,
+    "quality": 0.8,
+    "session_duration_minutes": 15
+  },
+  "video": {
+    "auto_generate": true,
+    "speed_multiplier": 20.0,
+    "quality": 23,
+    "add_timestamp": true,
+    "format": "mp4"
+  },
+  "storage": {
+    "retention_days": 7,
+    "auto_cleanup_enabled": true,
+    "cleanup_interval_hours": 24
+  }
+}

@@ -1,0 +1,43 @@
+[package]
+name = "screen-analyzer"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "screen_analyzer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 添加我们需要的依赖
+tokio = { version = "1", features = ["full"] }
+screenshots = "0.8"
+image = "0.24"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.11", features = ["json", "multipart"] }
+async-trait = "0.1"
+base64 = "0.22"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+cron = "0.12"  # 定时任务
+uuid = { version = "1.0", features = ["v4"] }  # 生成唯一ID
+mouse_position = "0.1"  # 跨平台获取鼠标位置
+
+[dev-dependencies]
+tempfile = "3.23.0"
