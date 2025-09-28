@@ -20,6 +20,29 @@
 - 🧹 **存储管理**：自动清理过期数据，默认保留7天记录
 - 🔒 **隐私保护**：所有数据本地存储，不上传云端
 
+## ⚠️ 重要提示
+
+### FFmpeg 二进制文件说明
+
+由于 FFmpeg 二进制文件体积较大（超过 GitHub 100MB 限制），这些文件**不包含在源码仓库中**。如果您从源码编译运行，需要手动下载：
+
+1. **下载地址**：
+   - Windows: [官方下载](https://www.gyan.dev/ffmpeg/builds/) → 下载 `ffmpeg-release-essentials.zip`
+   - macOS: [官方下载](https://evermeet.cx/ffmpeg/) 或通过 `brew install ffmpeg`
+   - Linux: 通过包管理器安装 (`apt/dnf/pacman install ffmpeg`)
+
+2. **放置位置**：
+   ```
+   src-tauri/resources/ffmpeg/
+   ├── windows/ffmpeg.exe
+   ├── macos/ffmpeg
+   └── linux/ffmpeg
+   ```
+
+3. **详细说明**：请参阅 [`src-tauri/resources/ffmpeg/README.md`](src-tauri/resources/ffmpeg/README.md)
+
+> 💡 **提示**：如果您只是想使用应用，请直接下载 [Releases](https://github.com/deletexiumu/screen-analyzer/releases) 中的安装包，已包含所有必需文件。
+
 ## 系统要求
 
 ### 运行环境

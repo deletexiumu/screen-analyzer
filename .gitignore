@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# FFmpeg 二进制文件
+src-tauri/resources/ffmpeg/windows/ffmpeg.exe
+src-tauri/resources/ffmpeg/macos/ffmpeg
+src-tauri/resources/ffmpeg/linux/ffmpeg
