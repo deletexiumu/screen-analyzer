@@ -40,7 +40,7 @@ export const useActivityStore = defineStore('activity', {
       summary_interval: 15,
       video_config: {
         auto_generate: true,
-        speed_multiplier: 4.0,
+        speed_multiplier: 8.0,
         quality: 23,
         add_timestamp: true
       },

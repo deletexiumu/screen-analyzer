@@ -101,23 +101,53 @@
         </div>
       </div>
 
-      <!-- 帧预览 -->
-      <div class="frames-section" v-if="session && session.frames?.length > 0">
-        <h4>截图预览（采样显示）</h4>
-        <div class="frames-gallery">
-          <div
-            v-for="(frame, index) in sampledFrames"
-            :key="index"
-            class="frame-item"
-            @click="previewFrame(frame)"
-          >
-            <img
-              :src="`file://${frame.file_path}`"
-              :alt="`Frame ${index + 1}`"
-              @error="handleImageError"
-            />
-            <div class="frame-time">
-              {{ formatTime(frame.timestamp) }}
+      <!-- 视频播放器或帧预览 -->
+      <div class="media-section" v-if="session">
+        <!-- 如果有视频，显示视频播放器 -->
+        <div v-if="session.session.video_path" class="video-section">
+          <h4>会话视频</h4>
+          <div class="video-container">
+            <video
+              ref="videoPlayer"
+              :src="videoUrl"
+              controls
+              preload="metadata"
+              width="100%"
+              style="max-width: 800px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);"
+              @error="handleVideoError"
+              @loadstart="onVideoLoadStart"
+              @loadeddata="onVideoLoadedData"
+            >
+              您的浏览器不支持视频播放
+            </video>
+          </div>
+        </div>
+
+        <!-- 如果没有视频，显示帧预览 -->
+        <div v-else-if="session.frames?.length > 0" class="frames-section">
+          <h4>截图预览（采样显示）</h4>
+          <div class="frames-gallery">
+            <div
+              v-for="(frame, index) in sampledFrames"
+              :key="index"
+              class="frame-item"
+              :class="{ 'no-animation': isWindows }"
+              @click="previewFrame(frame)"
+            >
+              <div class="frame-loading" v-if="loadingImages[index]">
+                <el-icon class="is-loading"><Loading /></el-icon>
+              </div>
+              <img
+                v-show="!loadingImages[index]"
+                :src="getConvertedPath(frame.file_path)"
+                :alt="`Frame ${index + 1}`"
+                @load="handleImageLoad(index)"
+                @error="handleImageError($event, index)"
+                loading="lazy"
+              />
+              <div class="frame-time">
+                {{ formatTime(frame.timestamp) }}
+              </div>
             </div>
           </div>
         </div>
@@ -171,10 +201,13 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
-import { VideoPlay, VideoCamera, Refresh } from '@element-plus/icons-vue'
+import { ref, computed, watch, onMounted, onUnmounted, reactive } from 'vue'
+import { VideoPlay, VideoCamera, Refresh, Loading } from '@element-plus/icons-vue'
 import { useActivityStore } from '../stores/activity'
 import dayjs from 'dayjs'
+import { ElMessage } from 'element-plus'
+import { convertFileSrc } from '@tauri-apps/api/core'
+import { invoke } from '@tauri-apps/api/core'
 import AddTagDialog from './AddTagDialog.vue'
 
 const props = defineProps({
@@ -194,6 +227,10 @@ const store = useActivityStore()
 const showAddTag = ref(false)
 const previewUrl = ref(null)
 const isProcessing = computed(() => store.systemStatus.is_processing)
+const videoPlayer = ref(null)
+const loadingImages = reactive({})
+const isWindows = ref(false)
+const videoUrl = ref(null)
 
 const dialogVisible = computed({
   get: () => props.modelValue,
@@ -201,6 +238,26 @@ const dialogVisible = computed({
 })
 
 const session = computed(() => store.selectedSession)
+
+// 加载视频URL（使用Tauri的文件协议）
+const loadVideoUrl = () => {
+  if (!session.value?.session?.video_path) return
+
+  try {
+    // 直接使用convertFileSrc转换本地文件路径为Tauri协议URL
+    // 这样视频会通过流式传输，不会一次性加载到内存
+    videoUrl.value = convertFileSrc(session.value.session.video_path)
+    console.log('视频URL:', videoUrl.value)
+  } catch (error) {
+    console.error('转换视频路径失败:', error)
+    ElMessage.error('视频路径转换失败：' + error)
+  }
+}
+
+// 转换文件路径
+const getConvertedPath = (filePath) => {
+  return filePath ? convertFileSrc(filePath) : '/placeholder.png'
+}
 
 // 解析的关键时刻
 const keyMoments = computed(() => {
@@ -269,38 +326,80 @@ const formatDuration = (startTime, endTime) => {
   return `${minutes}分钟`
 }
 
-// 获取类别颜色
-const getCategoryColor = (category) => {
-  const colors = {
-    'Work': '#409EFF',
-    'Personal': '#67C23A',
-    'Break': '#E6A23C',
-    'Idle': '#909399',
-    'Meeting': '#F56C6C',
-    'Coding': '#7C4DFF',
-    'Research': '#00BCD4',
-    'Communication': '#FFC107',
-    'Entertainment': '#FF69B4',
-    'Other': '#795548'
-  }
-  return colors[category] || '#909399'
+// 类别映射表（兼容旧数据）
+const categoryMapping = {
+  // 工作类
+  'work': 'work',
+  'Work': 'work',
+  'coding': 'work',
+  'Coding': 'work',
+  'writing': 'work',
+  'Writing': 'work',
+  'design': 'work',
+  'Design': 'work',
+  'planning': 'work',
+  'Planning': 'work',
+  'data_analysis': 'work',
+  'DataAnalysis': 'work',
+  // 沟通类
+  'communication': 'communication',
+  'Communication': 'communication',
+  'meeting': 'communication',
+  'Meeting': 'communication',
+  // 学习类
+  'learning': 'learning',
+  'Learning': 'learning',
+  'research': 'learning',
+  'Research': 'learning',
+  // 个人类
+  'personal': 'personal',
+  'Personal': 'personal',
+  'entertainment': 'personal',
+  'Entertainment': 'personal',
+  'social_media': 'personal',
+  'SocialMedia': 'personal',
+  'shopping': 'personal',
+  'Shopping': 'personal',
+  'finance': 'personal',
+  'Finance': 'personal',
+  // 空闲类
+  'idle': 'idle',
+  'Idle': 'idle',
+  // 其他类
+  'other': 'other',
+  'Other': 'other',
+  'break': 'other',
+  'Break': 'other',
+  'exercise': 'other',
+  'Exercise': 'other'
 }
 
-// 获取类别名称
+// 新的6类标签配置（分离emoji和名称）
+const categoryConfig = {
+  'work': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'communication': { name: '沟通', emoji: '💬', color: '#FFC107' },
+  'learning': { name: '学习', emoji: '📚', color: '#67C23A' },
+  'personal': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'idle': { name: '空闲', emoji: '⏸️', color: '#909399' },
+  'other': { name: '其他', emoji: '📌', color: '#6C757D' }
+}
+
+// 获取类别颜色
+const getCategoryColor = (category) => {
+  const mapped = categoryMapping[category] || 'other'
+  return categoryConfig[mapped]?.color || '#909399'
+}
+
+// 获取类别名称（不含emoji）
 const getCategoryName = (category) => {
-  const names = {
-    'Work': '工作',
-    'Personal': '私人',
-    'Break': '休息',
-    'Idle': '空闲',
-    'Meeting': '会议',
-    'Coding': '编程',
-    'Research': '研究',
-    'Communication': '沟通',
-    'Entertainment': '娱乐',
-    'Other': '其他'
-  }
-  return names[category] || category
+  const mapped = categoryMapping[category] || 'other'
+  return categoryConfig[mapped]?.name || category
+}
+
+// 获取类别emoji
+const getCategoryEmoji = (category) => {
+  const mapped = categoryMapping[category] || 'other'
+  return categoryConfig[mapped]?.emoji || '📌'
 }
 
 // 获取重要性类型
@@ -319,14 +418,22 @@ const getScoreColor = (percentage) => {
   return '#67C23A'
 }
 
+// 处理图片加载成功
+const handleImageLoad = (index) => {
+  loadingImages[index] = false
+}
+
 // 处理图片加载错误
-const handleImageError = (e) => {
+const handleImageError = (e, index) => {
   e.target.src = '/placeholder.png'
+  if (index !== undefined) {
+    loadingImages[index] = false
+  }
 }
 
 // 预览帧
 const previewFrame = (frame) => {
-  previewUrl.value = `file://${frame.file_path}`
+  previewUrl.value = convertFileSrc(frame.file_path)
 }
 
 // 移除标签
@@ -343,7 +450,14 @@ const addTag = async (tag) => {
 
 // 生成视频
 const generateVideo = async () => {
-  await store.generateVideo(session.value.session.id)
+  try {
+    await store.generateVideo(session.value.session.id)
+    // 重新获取会话详情以更新video_path
+    await store.fetchSessionDetail(session.value.session.id)
+    ElMessage.success('视频已生成并可播放')
+  } catch (error) {
+    console.error('生成视频失败:', error)
+  }
 }
 
 const retryAnalysis = async () => {
@@ -351,10 +465,18 @@ const retryAnalysis = async () => {
   await store.retrySessionAnalysis(session.value.session.id)
 }
 
+// 处理视频加载错误
+const handleVideoError = (e) => {
+  console.error('视频加载失败:', e)
+  console.log('视频路径:', session.value?.session?.video_path)
+  ElMessage.error('视频加载失败，请尝试重新生成')
+}
+
 // 播放视频
 const playVideo = () => {
-  // TODO: 实现视频播放
-  console.log('Play video:', session.value.session.video_path)
+  if (videoPlayer.value) {
+    videoPlayer.value.play()
+  }
 }
 
 // 关闭对话框
@@ -364,9 +486,40 @@ const handleClose = () => {
 }
 
 // 监听sessionId变化
-watch(() => props.sessionId, (newId) => {
+watch(() => props.sessionId, async (newId) => {
   if (newId) {
-    store.fetchSessionDetail(newId)
+    await store.fetchSessionDetail(newId)
+    // 如果有视频，加载视频
+    if (store.selectedSession?.session?.video_path) {
+      await loadVideoAsBlob()
+    }
+  }
+})
+
+// 监听会话视频路径变化
+watch(() => session.value?.session?.video_path, async (newPath) => {
+  if (newPath) {
+    await loadVideoAsBlob()
+  }
+})
+
+// 监听采样帧变化，初始化加载状态
+watch(sampledFrames, (frames) => {
+  frames.forEach((_, index) => {
+    loadingImages[index] = true
+  })
+}, { immediate: true })
+
+// 检测是否为Windows系统
+onMounted(() => {
+  isWindows.value = navigator.platform.toLowerCase().includes('win')
+})
+
+// 组件销毁时清理
+onUnmounted(() => {
+  // 清理视频URL
+  if (videoUrl.value) {
+    videoUrl.value = null
   }
 })
 </script>
@@ -429,6 +582,22 @@ watch(() => props.sessionId, (newId) => {
   color: #606266;
 }
 
+.media-section {
+  margin-top: 30px;
+}
+
+.video-section h4,
+.frames-section h4 {
+  margin-bottom: 15px;
+  color: #303133;
+}
+
+.video-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 15px;
+}
+
 .frames-gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -442,12 +611,33 @@ watch(() => props.sessionId, (newId) => {
   border-radius: 4px;
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transition: transform 0.3s;
+  transition: transform 0.3s, box-shadow 0.3s;
+  background: #f5f5f5;
+  min-height: 100px;
+}
+
+/* Windows 系统禁用动画以防止闪烁 */
+.frame-item.no-animation {
+  transition: none;
 }
 
 .frame-item:hover {
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.frame-item.no-animation:hover {
+  transform: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.frame-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  color: #409EFF;
 }
 
 .frame-item img {

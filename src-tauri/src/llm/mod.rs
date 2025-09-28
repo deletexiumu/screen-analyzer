@@ -10,10 +10,10 @@ pub use plugin::{
 pub use qwen::QwenProvider;
 
 use crate::settings::SettingsManager;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// LLM管理器
 pub struct LLMManager {
@@ -248,60 +248,146 @@ pub fn build_session_summary(
     segments: &[VideoSegment],
     timeline_cards: &[TimelineCard],
 ) -> SessionSummary {
-    if let Some(first_card) = timeline_cards.first() {
-        SessionSummary {
-            title: first_card.title.clone(),
-            summary: first_card.detailed_summary.clone(),
-            tags: vec![ActivityTag {
-                category: match first_card.category.as_str() {
-                    "Work" => ActivityCategory::Work,
-                    "Personal" => ActivityCategory::Personal,
-                    "Break" => ActivityCategory::Break,
-                    "Idle" => ActivityCategory::Idle,
-                    "Meeting" => ActivityCategory::Meeting,
-                    "Coding" => ActivityCategory::Coding,
-                    "Research" => ActivityCategory::Research,
-                    "Communication" => ActivityCategory::Communication,
-                    "Entertainment" => ActivityCategory::Entertainment,
-                    _ => ActivityCategory::Other,
-                },
-                confidence: 0.8,
-                keywords: vec![first_card.subcategory.clone()],
-            }],
-            start_time: window_start,
-            end_time: window_end,
-            key_moments: segments
+    use std::collections::HashMap;
+
+    // 统计各个类别的时间占比
+    let mut category_duration: HashMap<String, f32> = HashMap::new();
+    let mut total_duration = 0.0f32;
+
+    // 遍历所有timeline cards计算时间
+    for card in timeline_cards {
+        // 解析时间并计算持续时间（简化处理，假设MM:SS格式）
+        let duration = parse_duration(&card.start_time, &card.end_time).unwrap_or(15.0);
+        total_duration += duration;
+
+        let category = card.category.to_lowercase();
+        *category_duration.entry(category).or_insert(0.0) += duration;
+    }
+
+    // 生成标签列表（最多3个，按比重排序）
+    let mut tags: Vec<ActivityTag> = Vec::new();
+
+    if total_duration > 0.0 {
+        // 计算每个类别的比重并排序
+        let mut category_weights: Vec<(String, f32)> = category_duration
+            .into_iter()
+            .map(|(cat, duration)| (cat, duration / total_duration))
+            .collect();
+
+        category_weights.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // 取前3个类别生成标签
+        for (category_str, weight) in category_weights.iter().take(3) {
+            // 只添加比重超过10%的标签
+            if *weight < 0.1 {
+                break;
+            }
+
+            let category = match category_str.as_str() {
+                "work" | "coding" | "writing" | "design" | "planning" | "data_analysis" => ActivityCategory::Work,
+                "communication" | "meeting" => ActivityCategory::Communication,
+                "learning" | "research" => ActivityCategory::Learning,
+                "personal" | "entertainment" | "social_media" | "shopping" | "finance" => ActivityCategory::Personal,
+                "idle" => ActivityCategory::Idle,
+                _ => ActivityCategory::Other,
+            };
+
+            // 根据类别收集关键词
+            let keywords = timeline_cards
                 .iter()
-                .map(|seg| KeyMoment {
-                    time: seg.start_timestamp.clone(),
-                    description: seg.description.clone(),
-                    importance: 3,
-                })
-                .collect(),
-            productivity_score: Some(75.0),
-            focus_score: Some(80.0),
+                .filter(|card| card.category.to_lowercase() == *category_str)
+                .map(|card| card.subcategory.clone())
+                .collect::<Vec<_>>();
+
+            tags.push(ActivityTag {
+                category,
+                confidence: *weight,  // 使用时间占比作为confidence
+                keywords,
+            });
         }
+    }
+
+    // 如果没有有效标签，至少添加一个默认标签
+    if tags.is_empty() && !timeline_cards.is_empty() {
+        let first_card = &timeline_cards[0];
+        tags.push(ActivityTag {
+            category: map_category(&first_card.category),
+            confidence: 1.0,
+            keywords: vec![first_card.subcategory.clone()],
+        });
+    }
+
+    // 生成总结
+    let title = timeline_cards
+        .first()
+        .map(|c| c.title.clone())
+        .unwrap_or_else(|| "活动会话".to_string());
+
+    let summary = if timeline_cards.len() > 1 {
+        format!(
+            "本次会话包含{}个主要活动阶段。{}",
+            timeline_cards.len(),
+            timeline_cards
+                .iter()
+                .map(|c| c.title.clone())
+                .collect::<Vec<_>>()
+                .join("、")
+        )
     } else {
-        SessionSummary {
-            title: "活动会话".to_string(),
-            summary: segments
-                .first()
-                .map(|s| s.description.clone())
-                .unwrap_or_default(),
-            tags: vec![],
-            start_time: window_start,
-            end_time: window_end,
-            key_moments: segments
-                .iter()
-                .map(|seg| KeyMoment {
-                    time: seg.start_timestamp.clone(),
-                    description: seg.description.clone(),
-                    importance: 3,
-                })
-                .collect(),
-            productivity_score: None,
-            focus_score: None,
+        timeline_cards
+            .first()
+            .map(|c| c.detailed_summary.clone())
+            .unwrap_or_else(|| segments.first().map(|s| s.description.clone()).unwrap_or_default())
+    };
+
+    SessionSummary {
+        title,
+        summary,
+        tags,
+        start_time: window_start,
+        end_time: window_end,
+        key_moments: segments
+            .iter()
+            .map(|seg| KeyMoment {
+                time: seg.start_timestamp.clone(),
+                description: seg.description.clone(),
+                importance: 3,
+            })
+            .collect(),
+        productivity_score: Some(75.0),
+        focus_score: Some(80.0),
+    }
+}
+
+// 辅助函数：解析持续时间（MM:SS格式）
+fn parse_duration(start: &str, end: &str) -> Option<f32> {
+    // 简单处理MM:SS格式
+    let parse_time = |s: &str| -> Option<f32> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() == 2 {
+            let minutes = parts[0].parse::<f32>().ok()?;
+            let seconds = parts[1].parse::<f32>().ok()?;
+            Some(minutes * 60.0 + seconds)
+        } else {
+            None
         }
+    };
+
+    let start_seconds = parse_time(start)?;
+    let end_seconds = parse_time(end)?;
+
+    Some((end_seconds - start_seconds).abs())
+}
+
+// 辅助函数：映射类别
+fn map_category(category_str: &str) -> ActivityCategory {
+    match category_str.to_lowercase().as_str() {
+        "work" | "coding" | "writing" | "design" | "planning" | "data_analysis" => ActivityCategory::Work,
+        "communication" | "meeting" => ActivityCategory::Communication,
+        "learning" | "research" => ActivityCategory::Learning,
+        "personal" | "entertainment" | "social_media" | "shopping" | "finance" => ActivityCategory::Personal,
+        "idle" => ActivityCategory::Idle,
+        _ => ActivityCategory::Other,
     }
 }
 
@@ -462,6 +548,12 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
             } else {
                 info!("自动生成视频已关闭，跳过视频生成");
             }
+        }
+
+        // 检查是否有帧，如果没有帧则不创建会话
+        if frame_paths.is_empty() {
+            warn!("该时间段没有截图帧，跳过会话创建");
+            return Err(anyhow!("没有找到截图帧，无法创建会话"));
         }
 
         // 先创建会话获取session_id（用于关联LLM调用记录）

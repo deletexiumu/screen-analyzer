@@ -13,10 +13,10 @@
           <el-option
             v-for="item in categories"
             :key="item.value"
-            :label="item.label"
+            :label="`${item.emoji} ${item.label}`"
             :value="item.value"
           >
-            <span :style="{ color: item.color }">{{ item.label }}</span>
+            <span :style="{ color: item.color }">{{ item.emoji }} {{ item.label }}</span>
           </el-option>
         </el-select>
       </el-form-item>
@@ -93,18 +93,49 @@ const inputVisible = ref(false)
 const inputValue = ref('')
 const inputRef = ref(null)
 
-const categories = [
-  { value: 'Work', label: '工作', color: '#409EFF' },
-  { value: 'Personal', label: '私人', color: '#67C23A' },
-  { value: 'Break', label: '休息', color: '#E6A23C' },
-  { value: 'Idle', label: '空闲', color: '#909399' },
-  { value: 'Meeting', label: '会议', color: '#F56C6C' },
-  { value: 'Coding', label: '编程', color: '#7C4DFF' },
-  { value: 'Research', label: '研究', color: '#00BCD4' },
-  { value: 'Communication', label: '沟通', color: '#FFC107' },
-  { value: 'Entertainment', label: '娱乐', color: '#FF69B4' },
-  { value: 'Other', label: '其他', color: '#795548' }
-]
+// 从localStorage或默认值加载标签
+const loadCategories = () => {
+  const saved = localStorage.getItem('customTags')
+  if (saved) {
+    try {
+      const tags = JSON.parse(saved)
+      return tags.map(tag => ({
+        value: tag.value,
+        label: tag.label,
+        color: tag.color,
+        emoji: tag.emoji,
+        description: tag.description
+      }))
+    } catch (e) {
+      console.error('Failed to load saved tags:', e)
+    }
+  }
+
+  // 默认标签列表
+  return [
+    { value: 'work', label: '工作', emoji: '💼', color: '#409EFF' },
+    { value: 'meeting', label: '会议', emoji: '👥', color: '#F56C6C' },
+    { value: 'coding', label: '编程', emoji: '💻', color: '#7C4DFF' },
+    { value: 'research', label: '研究', emoji: '🔍', color: '#00BCD4' },
+    { value: 'learning', label: '学习', emoji: '📚', color: '#67C23A' },
+    { value: 'writing', label: '写作', emoji: '✍️', color: '#FF9800' },
+    { value: 'design', label: '设计', emoji: '🎨', color: '#E91E63' },
+    { value: 'communication', label: '沟通', emoji: '💬', color: '#FFC107' },
+    { value: 'planning', label: '规划', emoji: '📋', color: '#4CAF50' },
+    { value: 'data_analysis', label: '数据分析', emoji: '📊', color: '#795548' },
+    { value: 'entertainment', label: '娱乐', emoji: '🎮', color: '#FF69B4' },
+    { value: 'social_media', label: '社交媒体', emoji: '📱', color: '#9C27B0' },
+    { value: 'shopping', label: '购物', emoji: '🛒', color: '#FF5722' },
+    { value: 'finance', label: '财务', emoji: '💰', color: '#607D8B' },
+    { value: 'break', label: '休息', emoji: '☕', color: '#E6A23C' },
+    { value: 'exercise', label: '运动', emoji: '🏃', color: '#8BC34A' },
+    { value: 'personal', label: '个人事务', emoji: '🏠', color: '#03A9F4' },
+    { value: 'idle', label: '空闲', emoji: '⏸️', color: '#909399' },
+    { value: 'other', label: '其他', emoji: '📌', color: '#6C757D' }
+  ]
+}
+
+const categories = ref(loadCategories())
 
 // 显示输入框
 const showInput = () => {

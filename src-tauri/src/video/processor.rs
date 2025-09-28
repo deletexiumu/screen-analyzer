@@ -38,7 +38,7 @@ pub struct VideoConfig {
 impl Default for VideoConfig {
     fn default() -> Self {
         Self {
-            speed_multiplier: 20.0, // 20倍速
+            speed_multiplier: 8.0, // 8倍速
             fps: 30,
             resolution: (1920, 1080),
             quality: 23,
@@ -86,10 +86,16 @@ impl VideoProcessor {
         std::fs::create_dir_all(&output_dir)?;
         std::fs::create_dir_all(&temp_dir)?;
 
+        // 获取FFmpeg路径
+        let ffmpeg_path = crate::video::ffmpeg_helper::get_ffmpeg_path()
+            .unwrap_or_else(|_| PathBuf::from("ffmpeg"))
+            .to_string_lossy()
+            .to_string();
+
         Ok(Self {
             output_dir,
             temp_dir,
-            ffmpeg_path: "ffmpeg".to_string(),
+            ffmpeg_path,
         })
     }
 
@@ -213,19 +219,29 @@ impl VideoProcessor {
 
     /// 创建帧列表文件
     async fn create_frame_list(&self, frames: &[String]) -> Result<PathBuf> {
+        // 检查文件是否存在
+        let valid_frames: Vec<&String> = frames
+            .iter()
+            .filter(|path| std::path::Path::new(path).exists())
+            .collect();
+
+        if valid_frames.is_empty() {
+            return Err(anyhow::anyhow!("没有有效的帧文件"));
+        }
+
         let list_path = self
             .temp_dir
             .join(format!("frames_{}.txt", uuid::Uuid::new_v4()));
 
         let mut content = String::new();
-        for frame in frames {
+        for frame in &valid_frames {
             content.push_str(&format!("file '{}'\n", frame));
             content.push_str("duration 1\n"); // 每张图片展示1秒
         }
 
         // 最后一帧需要特殊处理
-        if !frames.is_empty() {
-            content.push_str(&format!("file '{}'\n", frames.last().unwrap()));
+        if !valid_frames.is_empty() {
+            content.push_str(&format!("file '{}'\n", valid_frames.last().unwrap()));
         }
 
         tokio::fs::write(&list_path, content).await?;
@@ -339,7 +355,7 @@ mod tests {
     #[test]
     fn test_video_config_default() {
         let config = VideoConfig::default();
-        assert_eq!(config.speed_multiplier, 20.0);
+        assert_eq!(config.speed_multiplier, 8.0);
         assert_eq!(config.fps, 30);
         assert_eq!(config.resolution, (1920, 1080));
         assert_eq!(config.quality, 23);

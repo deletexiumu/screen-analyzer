@@ -244,9 +244,9 @@ const updateCurrentTimeLine = () => {
 }
 
 // 时间轴配置
-const TIMELINE_START_HOUR = 7             // 开始时间（小时）
+const TIMELINE_START_HOUR = 0             // 开始时间（小时）- 从0点开始显示完整24小时
 const TIMELINE_END_HOUR = 23              // 结束时间（小时）
-const HOUR_HEIGHT = 180                   // 每小时的高度（像素） - 大幅增加间距让显示更宽松
+const HOUR_HEIGHT = 120                   // 每小时的高度（像素） - 调整高度以适应24小时
 const TIMELINE_PADDING = 60               // 时间轴顶部和底部的内边距
 const TIMELINE_OVERLAP_BUFFER = 10        // 判定重叠时的缓冲像素
 const TIMELINE_COLUMN_GAP_PERCENT = 2     // 同一时间段多列展示时的列间距（百分比）
@@ -890,38 +890,82 @@ const updateTooltipPosition = (event) => {
   }
 }
 
-// 获取类别颜色
-const getCategoryColor = (category) => {
-  const colors = {
-    'Work': '#409EFF',
-    'Personal': '#67C23A',
-    'Break': '#E6A23C',
-    'Idle': '#909399',
-    'Meeting': '#F56C6C',
-    'Coding': '#7C4DFF',
-    'Research': '#00BCD4',
-    'Communication': '#FFC107',
-    'Entertainment': '#FF69B4',
-    'Other': '#795548'
-  }
-  return colors[category] || '#909399'
+// 类别映射配置（支持新旧类别）
+const categoryConfig = {
+  // 新的6类标签
+  'work': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'communication': { name: '沟通', emoji: '💬', color: '#FFC107' },
+  'learning': { name: '学习', emoji: '📚', color: '#67C23A' },
+  'personal': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'idle': { name: '空闲', emoji: '⏸️', color: '#909399' },
+  'other': { name: '其他', emoji: '📌', color: '#6C757D' },
+
+  // 兼容旧的类别名称（首字母大写）
+  'Work': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'Coding': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'coding': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'Writing': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'writing': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'Design': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'design': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'Planning': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'planning': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'DataAnalysis': { name: '工作', emoji: '💼', color: '#409EFF' },
+  'data_analysis': { name: '工作', emoji: '💼', color: '#409EFF' },
+
+  'Communication': { name: '沟通', emoji: '💬', color: '#FFC107' },
+  'Meeting': { name: '沟通', emoji: '💬', color: '#FFC107' },
+  'meeting': { name: '沟通', emoji: '💬', color: '#FFC107' },
+
+  'Learning': { name: '学习', emoji: '📚', color: '#67C23A' },
+  'Research': { name: '学习', emoji: '📚', color: '#67C23A' },
+  'research': { name: '学习', emoji: '📚', color: '#67C23A' },
+
+  'Personal': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'Entertainment': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'entertainment': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'SocialMedia': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'social_media': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'Shopping': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'shopping': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'Finance': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+  'finance': { name: '个人', emoji: '🏠', color: '#FF69B4' },
+
+  'Idle': { name: '空闲', emoji: '⏸️', color: '#909399' },
+
+  'Other': { name: '其他', emoji: '📌', color: '#6C757D' },
+  'Break': { name: '其他', emoji: '📌', color: '#6C757D' },
+  'break': { name: '其他', emoji: '📌', color: '#6C757D' },
+  'Exercise': { name: '其他', emoji: '📌', color: '#6C757D' },
+  'exercise': { name: '其他', emoji: '📌', color: '#6C757D' },
 }
 
-// 获取类别名称
+// 获取类别颜色
+const getCategoryColor = (category) => {
+  if (!category) return '#909399'
+  const config = categoryConfig[category] || categoryConfig[category.toLowerCase()]
+  return config?.color || '#909399'
+}
+
+// 获取类别名称（不含emoji）
 const getCategoryName = (category) => {
-  const names = {
-    'Work': '工作',
-    'Personal': '私人',
-    'Break': '休息',
-    'Idle': '空闲',
-    'Meeting': '会议',
-    'Coding': '编程',
-    'Research': '研究',
-    'Communication': '沟通',
-    'Entertainment': '娱乐',
-    'Other': '其他'
-  }
-  return names[category] || category
+  if (!category) return '其他'
+  const config = categoryConfig[category] || categoryConfig[category.toLowerCase()]
+  return config?.name || category
+}
+
+// 获取类别emoji
+const getCategoryEmoji = (category) => {
+  if (!category) return '📌'
+  const config = categoryConfig[category] || categoryConfig[category.toLowerCase()]
+  return config?.emoji || '📌'
+}
+
+// 获取类别的完整显示（emoji + 名称）
+const getCategoryFullDisplay = (category) => {
+  const name = getCategoryName(category)
+  const emoji = getCategoryEmoji(category)
+  return `${emoji} ${name}`
 }
 
 // 判断是否是当前选中的会话
@@ -1262,7 +1306,7 @@ watch(hoveredSession, (newSession) => {
 
 .timeline-chart {
   position: relative;
-  min-height: 3180px; /* (23-7+1) * 180 + 120 */
+  min-height: 3000px; /* (23-0+1) * 120 + 120 = 24 * 120 + 120 = 3000 */
   margin-left: 70px;
   margin-right: 30px;
   padding-bottom: 80px;

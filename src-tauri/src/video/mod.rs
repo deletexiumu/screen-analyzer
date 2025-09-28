@@ -1,6 +1,7 @@
 // 视频处理模块 - 负责将截图序列生成视频
 
 pub mod processor;
+pub mod ffmpeg_helper;
 
 pub use processor::{VideoConfig, VideoFormat, VideoProcessor};
 
@@ -61,30 +62,27 @@ pub struct VideoUtils;
 
 impl VideoUtils {
     /// 验证FFmpeg是否可用
-    pub fn check_ffmpeg() -> Result<bool> {
-        let output = std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .output();
-
-        match output {
-            Ok(output) => {
-                let version = String::from_utf8_lossy(&output.stdout);
-                tracing::info!(
-                    "检测到FFmpeg: {}",
-                    version.lines().next().unwrap_or("未知版本")
-                );
-                Ok(true)
-            }
-            Err(_) => {
-                tracing::warn!("未检测到FFmpeg，视频生成功能将不可用");
-                Ok(false)
-            }
-        }
+    pub async fn check_ffmpeg() -> Result<bool> {
+        use crate::video::ffmpeg_helper;
+        Ok(ffmpeg_helper::check_ffmpeg_available().await)
     }
 
     /// 获取视频文件信息
     pub fn get_video_info(video_path: &Path) -> Result<VideoInfo> {
-        let output = std::process::Command::new("ffprobe")
+        // 获取FFmpeg路径
+        let ffmpeg_path = crate::video::ffmpeg_helper::get_ffmpeg_path()?;
+        let ffprobe_path = if ffmpeg_path == std::path::PathBuf::from("ffmpeg") {
+            std::path::PathBuf::from("ffprobe")
+        } else {
+            // 如果使用内置FFmpeg，ffprobe应该在同目录
+            ffmpeg_path.with_file_name(if cfg!(target_os = "windows") {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            })
+        };
+
+        let output = std::process::Command::new(&ffprobe_path)
             .args(&[
                 "-v",
                 "quiet",
@@ -146,7 +144,8 @@ impl VideoUtils {
         output_path: &Path,
         time_offset: f32,
     ) -> Result<()> {
-        let status = tokio::process::Command::new("ffmpeg")
+        let ffmpeg_path = crate::video::ffmpeg_helper::ensure_ffmpeg_extracted().await?;
+        let status = tokio::process::Command::new(&ffmpeg_path)
             .args(&[
                 "-ss",
                 &time_offset.to_string(),
@@ -180,7 +179,8 @@ impl VideoUtils {
 
         tokio::fs::write(&list_file, list_content).await?;
 
-        let status = tokio::process::Command::new("ffmpeg")
+        let ffmpeg_path = crate::video::ffmpeg_helper::ensure_ffmpeg_extracted().await?;
+        let status = tokio::process::Command::new(&ffmpeg_path)
             .args(&[
                 "-f",
                 "concat",

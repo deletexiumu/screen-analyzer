@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 pub mod scheduler;
 
@@ -141,7 +141,12 @@ impl ScreenCapture {
         #[cfg(not(target_os = "macos"))]
         {
             // 其他平台暂不实现锁屏检测，始终返回 false
-            warn!("当前平台不支持锁屏检测");
+            // Windows 等平台在锁屏时系统会自动禁止截屏权限，无需额外检测
+            use std::sync::Once;
+            static WARN_ONCE: Once = Once::new();
+            WARN_ONCE.call_once(|| {
+                debug!("当前平台不支持锁屏检测，依赖系统权限管理");
+            });
         }
 
         false

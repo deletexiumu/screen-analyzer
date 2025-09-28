@@ -49,7 +49,7 @@ impl QwenProvider {
             use_video_mode: true, // 默认使用视频模式
             session_video_path: None,
             last_call_ids: Mutex::new(HashMap::new()),
-            video_speed_multiplier: 20.0, // 默认20倍速
+            video_speed_multiplier: 8.0, // 默认8倍速
         }
     }
 
@@ -278,8 +278,13 @@ CRITICAL UNDERSTANDING:
 THE GOLDEN RULE:
 Create long, meaningful cards that represent cohesive sessions of activity, ideally 30-60 minutes+.
 
-## Categories:
-Work, Personal, Break, Idle, Meeting, Coding, Research, Communication, Entertainment, Other
+## Categories（精简为6类，使用英文值）:
+- work: 工作（编程、写作、设计、数据分析、会议、规划等专业工作）
+- communication: 沟通（聊天、邮件、视频会议、团队协作等）
+- learning: 学习（阅读、观看教程、研究、在线课程等）
+- personal: 个人（娱乐、购物、社交媒体、财务等个人活动）
+- idle: 空闲（无活动或锁屏状态）
+- other: 其他（休息、运动等未分类活动）
 
 ## Previous Timeline Cards:
 {}
@@ -315,12 +320,23 @@ Work, Personal, Break, Idle, Meeting, Coding, Research, Communication, Entertain
 - endTime 应该接近最后一个 segment 的结束时间
 - 时间格式必须与输入segments的格式完全一致
 
+## 重要：类别选择指导
+- 优先选择最具体、最准确的类别，而不是笼统的"other"
+- 对于混合活动，根据时间占比选择主要类别
+- 常见映射示例：
+  * 编程、开发、调试、会议、规划 → work
+  * 邮件、聊天、视频会议、团队协作 → communication
+  * 教程、文档阅读、研究、学习新技能 → learning
+  * 游戏、视频、购物、社交媒体 → personal
+  * 锁屏、无活动 → idle
+  * 只有真正无法归类的才用 other
+
 ## JSON Format:
 [
   {{
     "startTime": "根据输入格式返回",  // 如 "00:00" (MM:SS) 或 "2025-09-28T10:00:00+00:00" (ISO)
     "endTime": "根据输入格式返回",    // 如 "30:00" (MM:SS) 表示30分钟，可跨越多个片段
-    "category": "Work",
+    "category": "work",  // 必须从6个类别中选择最合适的，避免滥用other
     "subcategory": "Development",
     "title": "功能开发",
     "summary": "持续开发新功能模块",
@@ -411,7 +427,7 @@ Work, Personal, Break, Idle, Meeting, Coding, Research, Communication, Entertain
         Some(TimelineCard {
             start_time: start,
             end_time: end,
-            category: "Work".to_string(),
+            category: "work".to_string(),
             subcategory: "General".to_string(),
             title,
             summary: description.clone(),
@@ -914,11 +930,32 @@ impl LLMProvider for QwenProvider {
 {
   "title": "活动标题",
   "summary": "详细描述",
-  "tags": [{"category": "Work", "confidence": 0.9, "keywords": ["关键词"]}],
+  "tags": [{"category": "类别", "confidence": 0.9, "keywords": ["关键词"]}],
   "key_moments": [{"time": "00:00", "description": "描述", "importance": 3}],
   "productivity_score": 75,
   "focus_score": 80
-}"#
+}
+
+标签类别必须是以下之一（使用snake_case格式）：
+- work: 工作（专注工作、编程、文档等生产力活动）
+- meeting: 会议（视频会议、在线讨论、团队协作）
+- coding: 编程（代码编写、调试、开发环境配置）
+- research: 研究（资料查找、文献阅读、信息收集）
+- learning: 学习（在线课程、教程学习、技能提升）
+- writing: 写作（文档撰写、博客创作、笔记整理）
+- design: 设计（界面设计、图形处理、创意工作）
+- communication: 沟通（邮件、即时消息、社交互动）
+- planning: 规划（任务规划、日程安排、项目管理）
+- data_analysis: 数据分析（数据处理、报表制作、统计分析）
+- entertainment: 娱乐（游戏、视频、音乐、休闲浏览）
+- social_media: 社交媒体（社交平台浏览、内容创作与互动）
+- shopping: 购物（网上购物、商品浏览、价格比较）
+- finance: 财务（理财、账单管理、投资交易）
+- break: 休息（短暂休息、放松时间）
+- exercise: 运动（运动健身、健康管理）
+- personal: 个人事务（个人生活相关事务处理）
+- idle: 空闲（无具体活动、等待状态）
+- other: 其他（未分类的其他活动）"#
         .to_string();
 
         let response = self

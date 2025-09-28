@@ -236,13 +236,13 @@ impl Database {
         let rows = sqlx::query(
             r#"
             SELECT
-                DATE(start_time) as date,
+                DATE(datetime(start_time, 'localtime')) as date,
                 COUNT(*) as session_count,
                 SUM(CAST((julianday(end_time) - julianday(start_time)) * 24 * 60 AS INTEGER)) as total_duration_minutes,
                 GROUP_CONCAT(DISTINCT json_extract(tags, '$[0].category')) as main_categories
             FROM sessions
-            WHERE DATE(start_time) BETWEEN DATE(?) AND DATE(?)
-            GROUP BY DATE(start_time)
+            WHERE DATE(datetime(start_time, 'localtime')) BETWEEN DATE(?) AND DATE(?)
+            GROUP BY DATE(datetime(start_time, 'localtime'))
             ORDER BY date DESC
             "#
         )
@@ -275,17 +275,24 @@ impl Database {
 
     /// 获取某一天的所有会话
     pub async fn get_sessions_by_date(&self, date: &str) -> Result<Vec<Session>> {
+        // 将日期转换为UTC的开始和结束时间戳
+        // 假设date格式为YYYY-MM-DD，需要转换为当地时间对应的UTC时间范围
+        let start_of_day = format!("{} 00:00:00", date);
+        let end_of_day = format!("{} 23:59:59", date);
+
         let sessions = sqlx::query_as::<_, Session>(
             r#"
             SELECT
                 id, start_time, end_time, title, summary,
                 video_path, tags, created_at
             FROM sessions
-            WHERE DATE(start_time) = DATE(?)
+            WHERE datetime(start_time, 'localtime') >= ?
+              AND datetime(start_time, 'localtime') <= ?
             ORDER BY start_time DESC
             "#,
         )
-        .bind(date)
+        .bind(start_of_day)
+        .bind(end_of_day)
         .fetch_all(&self.pool)
         .await?;
 
@@ -348,6 +355,23 @@ impl Database {
         Ok(())
     }
 
+    /// 更新会话视频路径
+    pub async fn update_session_video_path(&self, session_id: i64, video_path: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE sessions
+            SET video_path = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(video_path)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     /// 删除过期的会话和关联数据
     pub async fn delete_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<u64> {
         let result = sqlx::query(
@@ -366,6 +390,16 @@ impl Database {
         }
 
         Ok(deleted_count)
+    }
+
+    /// 删除单个会话
+    pub async fn delete_session(&self, session_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE id = ?")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        info!("删除会话: {}", session_id);
+        Ok(())
     }
 
     /// 获取数据库统计信息

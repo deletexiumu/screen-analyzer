@@ -36,18 +36,27 @@
             </el-icon>
             {{ store.isCapturing ? '暂停' : '恢复' }}
           </el-button>
-          <el-button @click="handleTriggerAnalysis" :loading="store.isProcessing">
-            <el-icon><MagicStick /></el-icon>
-            手动分析
-          </el-button>
-          <el-button type="danger" @click="handleTestCapture">
-            <el-icon><Camera /></el-icon>
-            测试截屏
-          </el-button>
           <el-button @click="showSettings = true">
             <el-icon><Setting /></el-icon>
             设置
           </el-button>
+          <el-dropdown @command="handleMoreCommand" style="margin-left: 12px">
+            <el-button>
+              <el-icon><More /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="analyze" :disabled="store.isProcessing">
+                  <el-icon><MagicStick /></el-icon>
+                  手动分析
+                </el-dropdown-item>
+                <el-dropdown-item command="test-capture">
+                  <el-icon><Camera /></el-icon>
+                  测试截屏
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -112,7 +121,8 @@ import {
   MagicStick,
   Setting,
   Loading,
-  Camera
+  Camera,
+  More
 } from '@element-plus/icons-vue'
 import { useActivityStore } from './stores/activity'
 import CalendarView from './components/CalendarView.vue'
@@ -188,6 +198,18 @@ const handleTriggerAnalysis = async () => {
     if (error !== 'cancel') {
       console.error('Failed to trigger analysis:', error)
     }
+  }
+}
+
+// 处理更多操作下拉菜单
+const handleMoreCommand = (command) => {
+  switch (command) {
+    case 'analyze':
+      handleTriggerAnalysis()
+      break
+    case 'test-capture':
+      handleTestCapture()
+      break
   }
 }
 

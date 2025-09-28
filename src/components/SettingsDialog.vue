@@ -134,6 +134,11 @@
         </el-form>
       </el-tab-pane>
 
+      <!-- 标签管理 -->
+      <el-tab-pane label="标签管理" name="tags">
+        <TagManager />
+      </el-tab-pane>
+
       <!-- 存储管理 -->
       <el-tab-pane label="存储管理" name="storage">
         <div class="storage-info">
@@ -174,6 +179,18 @@
             >
               <el-icon><Refresh /></el-icon>
               刷新统计
+            </el-button>
+            <el-button
+              @click="openStorageFolder('frames')"
+            >
+              <el-icon><Folder /></el-icon>
+              打开截图文件夹
+            </el-button>
+            <el-button
+              @click="openStorageFolder('videos')"
+            >
+              <el-icon><VideoCamera /></el-icon>
+              打开视频文件夹
             </el-button>
           </div>
         </div>
@@ -219,10 +236,11 @@
 
 <script setup>
 import { ref, computed, reactive, watch, onMounted } from 'vue'
-import { Delete, Refresh, VideoCamera } from '@element-plus/icons-vue'
+import { Delete, Refresh, VideoCamera, Folder } from '@element-plus/icons-vue'
 import { useActivityStore } from '../stores/activity'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
+import TagManager from './TagManager.vue'
 
 const props = defineProps({
   modelValue: {
@@ -402,6 +420,15 @@ const refreshStorageStats = async () => {
   }
 }
 
+// 打开存储文件夹
+const openStorageFolder = async (folderType) => {
+  try {
+    await invoke('open_storage_folder', { folderType })
+  } catch (error) {
+    ElMessage.error('打开文件夹失败: ' + error)
+  }
+}
+
 // 关闭对话框
 const handleClose = () => {
   dialogVisible.value = false
@@ -456,6 +483,7 @@ onMounted(() => {
   margin-top: 20px;
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .about-content {

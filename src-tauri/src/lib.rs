@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 
 // 导入必要的类型
 use capture::{scheduler::CaptureScheduler, ScreenCapture};
@@ -344,6 +344,52 @@ fn parse_video_window_from_stem(
     ))
 }
 
+/// 获取视频文件内容（返回二进制数据）
+#[tauri::command]
+async fn get_video_data(
+    state: tauri::State<'_, AppState>,
+    session_id: i64,
+) -> Result<Vec<u8>, String> {
+    use tokio::fs;
+
+    // 获取会话详情
+    let session = state
+        .db
+        .get_session_detail(session_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if let Some(video_path) = session.session.video_path {
+        // 读取视频文件
+        let data = fs::read(&video_path).await
+            .map_err(|e| format!("读取视频文件失败: {}", e))?;
+        Ok(data)
+    } else {
+        Err("该会话没有生成视频".to_string())
+    }
+}
+
+/// 获取视频文件的URL（处理Windows路径问题）
+#[tauri::command]
+async fn get_video_url(
+    state: tauri::State<'_, AppState>,
+    session_id: i64,
+) -> Result<String, String> {
+    // 获取会话详情
+    let session = state
+        .db
+        .get_session_detail(session_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if let Some(video_path) = session.session.video_path {
+        // 直接返回文件路径，前端使用convertFileSrc处理
+        Ok(video_path)
+    } else {
+        Err("该会话没有生成视频".to_string())
+    }
+}
+
 /// 生成视频
 #[tauri::command]
 async fn generate_video(
@@ -360,16 +406,107 @@ async fn generate_video(
         .await
         .map_err(|e| e.to_string())?;
 
-    // 提取帧路径
-    let frame_paths: Vec<String> = session_detail
-        .frames
-        .iter()
-        .map(|f| f.file_path.clone())
-        .collect();
+    // 提取帧路径 - 实现抽帧策略：每5秒取一帧
+    let all_frames = &session_detail.frames;
 
-    if frame_paths.is_empty() {
-        return Err("该会话没有截图帧".to_string());
+    // 如果没有帧，处理错误
+    if all_frames.is_empty() {
+        error!("会话 {} 没有截图帧，删除该会话", session_id);
+        if let Err(e) = state.db.delete_session(session_id).await {
+            error!("删除空会话失败: {}", e);
+        }
+        return Err("该会话没有截图帧，已删除该会话".to_string());
     }
+
+    // 实现智能抽帧：基于时间戳每5秒取一帧，并确保关键时间点（00,15,30,45秒）的帧被包含
+    let frame_paths: Vec<String> = if all_frames.len() <= 12 {
+        // 如果帧数少于12帧（1分钟内），使用全部帧
+        all_frames.iter().map(|f| f.file_path.clone()).collect()
+    } else {
+        use chrono::Timelike;
+        use std::collections::HashSet;
+
+        let mut selected_indices = HashSet::new();
+        let mut sampled = Vec::new();
+
+        // 1. 添加第一帧和最后一帧
+        selected_indices.insert(0);
+        selected_indices.insert(all_frames.len() - 1);
+
+        // 2. 找到每个关键时间点（00,15,30,45秒）最近的帧
+        let key_seconds = vec![0, 15, 30, 45];
+
+        // 按分钟分组，找每分钟内关键时间点最近的帧
+        let mut minute_groups = std::collections::HashMap::new();
+        for (i, frame) in all_frames.iter().enumerate() {
+            let minute = frame.timestamp.minute();
+            minute_groups.entry(minute).or_insert(Vec::new()).push((i, frame));
+        }
+
+        // 对每个分钟组，找到距离关键时间点最近的帧
+        for (_minute, frames) in minute_groups.iter() {
+            for &key_sec in &key_seconds {
+                if let Some((idx, _frame)) = frames.iter()
+                    .min_by_key(|(_, f)| {
+                        let sec = f.timestamp.second() as i32;
+                        // 计算距离关键时间点的最小距离
+                        (sec - key_sec as i32).abs()
+                    }) {
+                    selected_indices.insert(*idx);
+                }
+            }
+        }
+
+        // 3. 基于5秒间隔选择帧
+        let mut last_added_timestamp: Option<chrono::DateTime<chrono::Utc>> = None;
+
+        for (i, frame) in all_frames.iter().enumerate() {
+            // 如果已经被选中（第一帧、最后一帧或关键时间点），跳过间隔检查
+            if selected_indices.contains(&i) {
+                sampled.push((i, frame.file_path.clone()));
+                last_added_timestamp = Some(frame.timestamp);
+                continue;
+            }
+
+            // 检查与上一个添加帧的时间间隔
+            if let Some(last_time) = last_added_timestamp {
+                let time_diff_ms = frame.timestamp.timestamp_millis() - last_time.timestamp_millis();
+                if time_diff_ms >= 5000 {
+                    // 间隔大于等于5秒，添加此帧
+                    sampled.push((i, frame.file_path.clone()));
+                    last_added_timestamp = Some(frame.timestamp);
+                }
+            }
+        }
+
+        // 按索引排序，确保帧的顺序正确
+        sampled.sort_by_key(|(idx, _)| *idx);
+
+        // 去重并提取文件路径
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        for (_, path) in sampled {
+            if seen.insert(path.clone()) {
+                result.push(path);
+            }
+        }
+
+        info!("视频抽帧：原始 {} 帧，抽样后 {} 帧（基于时间戳，5秒间隔+关键时间点）",
+              all_frames.len(), result.len());
+
+        // 打印调试信息：显示选中的帧的时间戳
+        for (i, frame) in all_frames.iter().enumerate() {
+            if result.contains(&frame.file_path) {
+                debug!("选中帧 {}: 时间 {}:{}:{}",
+                      i,
+                      frame.timestamp.minute(),
+                      frame.timestamp.second(),
+                      frame.timestamp.timestamp_subsec_millis());
+            }
+        }
+
+        result
+    };
 
     // 生成输出路径
     let output_path = state
@@ -381,6 +518,9 @@ async fn generate_video(
     let mut config = video::VideoConfig::default();
     if let Some(speed) = speed_multiplier {
         config.speed_multiplier = speed;
+    } else {
+        // 默认4倍速播放
+        config.speed_multiplier = 8.0;
     }
 
     // 生成视频
@@ -390,6 +530,17 @@ async fn generate_video(
         .await
         .map_err(|e| e.to_string())?;
 
+    // 更新数据库中的视频路径
+    state
+        .db
+        .update_session_video_path(session_id, &result.file_path)
+        .await
+        .map_err(|e| {
+            error!("更新会话视频路径失败: {}", e);
+            e.to_string()
+        })?;
+
+    info!("视频生成成功并已更新数据库: {}", result.file_path);
     Ok(result.file_path)
 }
 
@@ -879,6 +1030,52 @@ async fn regenerate_timeline(
         "重新生成完成：处理了 {} 个分段，生成了 {} 个时间线卡片",
         total_segments, total_cards
     ))
+}
+
+/// 打开存储文件夹
+#[tauri::command]
+async fn open_storage_folder(
+    state: tauri::State<'_, AppState>,
+    folder_type: String,
+) -> Result<(), String> {
+
+    let path = match folder_type.as_str() {
+        "frames" => state.capture.frames_dir(),
+        "videos" => state.video_processor.output_dir.clone(),
+        _ => return Err(format!("未知的文件夹类型: {}", folder_type)),
+    };
+
+    // 确保目录存在
+    if !path.exists() {
+        std::fs::create_dir_all(&path).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+
+    // 根据操作系统打开文件夹
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件夹: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件夹: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件夹: {}", e))?;
+    }
+
+    Ok(())
 }
 
 /// 测试LLM API连接
@@ -1387,6 +1584,8 @@ pub fn run() {
             toggle_capture,
             trigger_analysis,
             generate_video,
+            get_video_url,
+            get_video_data,
             test_generate_videos,
             cleanup_storage,
             get_storage_stats,
@@ -1397,6 +1596,7 @@ pub fn run() {
             retry_session_analysis,
             regenerate_timeline,
             delete_session,
+            open_storage_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

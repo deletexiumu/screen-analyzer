@@ -26,6 +26,7 @@
 - **操作系统**：macOS 10.15+ / Windows 10+ / Linux (Ubuntu 20.04+)
 - **内存**：建议 8GB 及以上
 - **存储空间**：至少 10GB 可用空间（用于存储截图和视频）
+- **FFmpeg**：应用已内置，无需单独安装（如需使用系统FFmpeg，请确保已安装）
 
 ### 开发环境
 - Node.js 18.0+
@@ -59,12 +60,18 @@ npm install
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-#### 3. 开发模式运行
+#### 3. 配置 FFmpeg（可选）
+应用已内置 FFmpeg，如需使用内置版本：
+1. 下载对应平台的 FFmpeg 二进制文件
+2. 放置到 `src-tauri/resources/ffmpeg/[platform]/` 目录
+3. 详见 `src-tauri/resources/README.md`
+
+#### 4. 开发模式运行
 ```bash
 npm run tauri dev
 ```
 
-#### 4. 构建生产版本
+#### 5. 构建生产版本
 
 **macOS**:
 ```bash
@@ -162,7 +169,7 @@ sudo systemctl start screen-analyzer
 2. **生成回顾视频**
    - 选择会话
    - 点击"生成视频"按钮
-   - 设置播放速度（默认20倍速）
+   - 设置播放速度（默认4倍速）
 
 3. **手动分析**
    - 点击"分析"按钮触发 AI 分析
@@ -201,7 +208,12 @@ A: 请检查：
 A: 需要在系统偏好设置中授予"屏幕录制"权限，授权后需要重启应用。
 
 ### Q: 视频生成失败？
-A: 确保系统已安装 FFmpeg，或者截图文件没有被删除。
+A:
+1. 应用已内置 FFmpeg，如果仍然失败请检查：
+   - 确保 `src-tauri/resources/ffmpeg/` 目录下有对应平台的FFmpeg文件
+   - Windows: `ffmpeg.exe`，macOS/Linux: `ffmpeg`
+2. 检查截图文件是否存在
+3. 确保会话有对应的截图帧
 
 ## 技术栈
 

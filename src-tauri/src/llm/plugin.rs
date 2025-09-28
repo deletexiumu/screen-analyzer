@@ -21,20 +21,16 @@ pub struct ActivityTag {
     pub keywords: Vec<String>,
 }
 
-/// 活动类别
+/// 活动类别（精简为6类，便于人工和AI标注）
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ActivityCategory {
-    Work,          // 工作
-    Personal,      // 私人
-    Break,         // 休息
-    Idle,          // 空闲
-    Meeting,       // 会议
-    Coding,        // 编程
-    Research,      // 研究/学习
-    Communication, // 沟通（邮件、聊天）
-    Entertainment, // 娱乐
-    Other,         // 其他
+    Work,          // 工作（编程、写作、设计、数据分析、会议、规划等）
+    Communication, // 沟通（聊天、邮件、视频会议等）
+    Learning,      // 学习（阅读、观看教程、研究等）
+    Personal,      // 个人（娱乐、购物、社交媒体、财务等）
+    Idle,          // 空闲（有特殊意义，表示无活动或锁屏状态）
+    Other,         // 其他（休息、运动等未分类活动）
 }
 
 /// 视频分段
@@ -487,14 +483,10 @@ impl ActivityCategory {
     pub fn to_chinese(&self) -> &str {
         match self {
             Self::Work => "工作",
-            Self::Personal => "私人",
-            Self::Break => "休息",
-            Self::Idle => "空闲",
-            Self::Meeting => "会议",
-            Self::Coding => "编程",
-            Self::Research => "研究",
             Self::Communication => "沟通",
-            Self::Entertainment => "娱乐",
+            Self::Learning => "学习",
+            Self::Personal => "个人",
+            Self::Idle => "空闲",
             Self::Other => "其他",
         }
     }
@@ -502,16 +494,12 @@ impl ActivityCategory {
     /// 获取类别的颜色（用于UI显示）
     pub fn color(&self) -> &str {
         match self {
-            Self::Work => "#409EFF",          // 蓝色
-            Self::Personal => "#67C23A",      // 绿色
-            Self::Break => "#E6A23C",         // 橙色
-            Self::Idle => "#909399",          // 灰色
-            Self::Meeting => "#F56C6C",       // 红色
-            Self::Coding => "#7C4DFF",        // 紫色
-            Self::Research => "#00BCD4",      // 青色
-            Self::Communication => "#FFC107", // 黄色
-            Self::Entertainment => "#FF69B4", // 粉色
-            Self::Other => "#795548",         // 棕色
+            Self::Work => "#409EFF",          // 蓝色（专业工作）
+            Self::Communication => "#FFC107", // 黄色（沟通交流）
+            Self::Learning => "#67C23A",      // 绿色（学习成长）
+            Self::Personal => "#FF69B4",      // 粉色（个人活动）
+            Self::Idle => "#909399",          // 灰色（空闲状态）
+            Self::Other => "#6C757D",         // 深灰（其他活动）
         }
     }
 }
@@ -607,7 +595,7 @@ pub trait LLMProvider: Send + Sync + std::any::Any {
     async fn generate_timeline(
         &self,
         segments: Vec<VideoSegment>,
-        previous_cards: Option<Vec<TimelineCard>>,
+        _previous_cards: Option<Vec<TimelineCard>>,
     ) -> Result<Vec<TimelineCard>> {
         // 默认实现：将segment转换为简单的timeline卡片
         let mut cards = Vec::new();

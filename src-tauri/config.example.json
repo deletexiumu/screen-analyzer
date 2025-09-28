@@ -18,7 +18,7 @@
   },
   "video": {
     "auto_generate": true,
-    "speed_multiplier": 20.0,
+    "speed_multiplier": 8.0,
     "quality": 23,
     "add_timestamp": true,
     "format": "mp4"
