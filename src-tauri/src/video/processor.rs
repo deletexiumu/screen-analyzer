@@ -125,26 +125,28 @@ impl VideoProcessor {
             return Err(anyhow::anyhow!("没有可用的帧"));
         }
 
-        // 检测所有图片的分辨率，取最大值
-        let mut max_width = 0u32;
-        let mut max_height = 0u32;
+        // 快速检测图片分辨率：只检查前几张图片，假设所有图片分辨率相同
+        // 取输入图片和配置分辨率的最大值，确保容器足够大
+        let mut resolution = config.resolution;
 
-        for frame_path in &frames {
-            if let Ok(img) = image::open(frame_path) {
-                let (width, height) = img.dimensions();
-                max_width = max_width.max(width);
-                max_height = max_height.max(height);
+        // 只检查前3张图片，避免性能问题
+        let sample_count = frames.len().min(3);
+        if sample_count > 0 {
+            info!("检测图片分辨率，采样 {} 张...", sample_count);
+
+            for (idx, frame_path) in frames.iter().take(sample_count).enumerate() {
+                if let Ok(img) = image::open(frame_path) {
+                    let (width, height) = img.dimensions();
+                    info!("图片 #{}: {}x{}", idx + 1, width, height);
+
+                    // 取各维度的最大值，确保视频容器能容纳所有图片
+                    resolution.0 = resolution.0.max(width);
+                    resolution.1 = resolution.1.max(height);
+                }
             }
-        }
 
-        // 如果检测失败，使用配置的默认分辨率
-        let resolution = if max_width > 0 && max_height > 0 {
-            info!("检测到最大分辨率: {}x{}", max_width, max_height);
-            (max_width, max_height)
-        } else {
-            info!("使用默认分辨率: {}x{}", config.resolution.0, config.resolution.1);
-            config.resolution
-        };
+            info!("输出视频分辨率: {}x{}", resolution.0, resolution.1);
+        }
 
         // 生成帧列表文件
         let frame_list_path = self.create_frame_list(&frames).await?;
@@ -164,9 +166,11 @@ impl VideoProcessor {
         // 视频滤镜
         let mut filters = vec![];
 
-        // 缩放到检测到的最大分辨率
+        // 如果需要缩放，使用scale滤镜
+        // 使用force_original_aspect_ratio=increase确保图片不会比目标小
+        // pad确保最终尺寸正确
         filters.push(format!(
-            "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
+            "scale=w={}:h={}:force_original_aspect_ratio=increase,crop={}:{}",
             resolution.0, resolution.1, resolution.0, resolution.1
         ));
 
