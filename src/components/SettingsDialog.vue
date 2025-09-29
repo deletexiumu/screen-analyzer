@@ -41,6 +41,33 @@
             />
             <span class="form-tip">分钟</span>
           </el-form-item>
+
+          <el-form-item label="截屏分辨率">
+            <el-select v-model="settings.capture_settings.resolution" style="width: 200px">
+              <el-option value="1080p" label="1080P (1920×1080)" />
+              <el-option value="2k" label="2K (2560×1440)" />
+              <el-option value="4k" label="4K (3840×2160)" />
+              <el-option value="original" label="原始分辨率" />
+            </el-select>
+            <span class="form-tip">更高分辨率占用更多存储</span>
+          </el-form-item>
+
+          <el-form-item label="图片质量">
+            <el-slider
+              v-model="settings.capture_settings.image_quality"
+              :min="50"
+              :max="100"
+              :step="5"
+              show-input
+              style="width: 300px"
+            />
+            <span class="form-tip">值越高质量越好，文件越大</span>
+          </el-form-item>
+
+          <el-form-item label="黑屏检测">
+            <el-switch v-model="settings.capture_settings.detect_black_screen" />
+            <span class="form-tip">自动跳过锁屏或黑屏时的截图</span>
+          </el-form-item>
         </el-form>
       </el-tab-pane>
 
@@ -276,6 +303,12 @@ const settings = reactive({
     quality: 23,
     add_timestamp: true
   },
+  capture_settings: {
+    resolution: '1080p',
+    image_quality: 85,
+    detect_black_screen: true,
+    black_screen_threshold: 5
+  },
   ui_settings: null
 })
 
@@ -331,6 +364,7 @@ const saveSettings = async () => {
   saving.value = true
   try {
     const videoConfigPayload = JSON.parse(JSON.stringify(settings.video_config))
+    const captureSettingsPayload = JSON.parse(JSON.stringify(settings.capture_settings))
     // 保存基础设置
     await store.updateConfig({
       retention_days: settings.retention_days,
@@ -338,6 +372,7 @@ const saveSettings = async () => {
       capture_interval: settings.capture_interval,
       summary_interval: settings.summary_interval,
       video_config: videoConfigPayload,
+      capture_settings: captureSettingsPayload,
       ui_settings: settings.ui_settings
     })
 
@@ -436,10 +471,13 @@ const handleClose = () => {
 
 // 初始化设置
 const initSettings = () => {
-  const { video_config, llm_config, ...rest } = store.appConfig
+  const { video_config, llm_config, capture_settings, ...rest } = store.appConfig
   Object.assign(settings, rest)
   if (video_config) {
     Object.assign(settings.video_config, video_config)
+  }
+  if (capture_settings) {
+    Object.assign(settings.capture_settings, capture_settings)
   }
   // 加载LLM配置
   if (llm_config) {

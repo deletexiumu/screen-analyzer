@@ -62,6 +62,9 @@ impl SettingsManager {
         if let Some(llm) = update.llm_config {
             config.llm_config = Some(llm);
         }
+        if let Some(capture) = update.capture_settings {
+            config.capture_settings = Some(capture);
+        }
 
         self.save(&config).await?;
         Ok(config.clone())

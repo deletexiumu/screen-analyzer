@@ -24,6 +24,66 @@ pub struct AppConfig {
     pub ui_settings: Option<UISettings>,
     /// LLM配置
     pub llm_config: Option<LLMProviderConfig>,
+    /// 截屏配置
+    pub capture_settings: Option<CaptureSettings>,
+}
+
+/// 截屏设置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureSettings {
+    /// 截屏分辨率
+    pub resolution: CaptureResolution,
+    /// 图片质量(1-100)
+    pub image_quality: u8,
+    /// 是否启用黑屏检测
+    pub detect_black_screen: bool,
+    /// 黑屏检测阈值(0-255)
+    pub black_screen_threshold: u8,
+}
+
+impl Default for CaptureSettings {
+    fn default() -> Self {
+        Self {
+            resolution: CaptureResolution::FHD,
+            image_quality: 85,
+            detect_black_screen: true,
+            black_screen_threshold: 5,
+        }
+    }
+}
+
+/// 截屏分辨率枚举
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureResolution {
+    #[serde(rename = "1080p")]
+    FHD,     // 1920x1080 (Full HD)
+    #[serde(rename = "2k")]
+    QHD,     // 2560x1440 (2K/Quad HD)
+    #[serde(rename = "4k")]
+    UHD,     // 3840x2160 (4K/Ultra HD)
+    #[serde(rename = "original")]
+    Original, // 原始分辨率
+}
+
+impl CaptureResolution {
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::FHD => Some((1920, 1080)),
+            Self::QHD => Some((2560, 1440)),
+            Self::UHD => Some((3840, 2160)),
+            Self::Original => None,
+        }
+    }
+
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::FHD => "1080P (1920×1080)",
+            Self::QHD => "2K (2560×1440)",
+            Self::UHD => "4K (3840×2160)",
+            Self::Original => "原始分辨率",
+        }
+    }
 }
 
 /// 视频设置
@@ -67,6 +127,8 @@ pub struct PersistedAppConfig {
     pub ui_settings: Option<UISettings>,
     /// LLM配置
     pub llm_config: Option<LLMProviderConfig>,
+    /// 截屏配置
+    pub capture_settings: Option<CaptureSettings>,
 }
 
 impl Default for PersistedAppConfig {
@@ -79,6 +141,7 @@ impl Default for PersistedAppConfig {
             video_config: VideoSettings::default(),
             ui_settings: Some(UISettings::default()),
             llm_config: None,
+            capture_settings: Some(CaptureSettings::default()),
         }
     }
 }

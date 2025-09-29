@@ -58,7 +58,12 @@ impl CaptureScheduler {
                         trace!("初始截屏成功: {}", frame.timestamp);
                     }
                     Err(e) => {
-                        error!("初始截屏失败: {}", e);
+                        // 黑屏不是真正的错误，只记录trace级别日志
+                        if e.to_string().contains("黑屏") {
+                            trace!("初始截屏检测到黑屏，已跳过");
+                        } else {
+                            error!("初始截屏失败: {}", e);
+                        }
                     }
                 }
             }
@@ -77,7 +82,12 @@ impl CaptureScheduler {
                         trace!("自动截屏成功: {}", frame.timestamp);
                     }
                     Err(e) => {
-                        error!("自动截屏失败: {}", e);
+                        // 黑屏不是真正的错误，只记录trace级别日志
+                        if e.to_string().contains("黑屏") {
+                            trace!("跳过黑屏图像");
+                        } else {
+                            error!("自动截屏失败: {}", e);
+                        }
                     }
                 }
             }

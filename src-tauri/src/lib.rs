@@ -133,6 +133,12 @@ async fn update_config(
         info!("总结间隔更新为: {}分钟", summary_interval);
     }
 
+    // 更新截屏配置
+    if let Some(capture_settings) = config.capture_settings {
+        state.capture.update_settings(capture_settings.clone()).await;
+        info!("截屏配置已更新: {:?}", capture_settings);
+    }
+
     Ok(updated_config)
 }
 
@@ -779,6 +785,7 @@ async fn configure_llm_provider(
         capture_interval: None,
         summary_interval: None,
         video_config: None,
+        capture_settings: None,
         ui_settings: None,
         llm_config: Some(llm_provider_config),
     };
@@ -1452,6 +1459,12 @@ pub fn run() {
 
                 // 读取初始配置
                 let initial_config = settings.get().await;
+
+                // 从配置加载截屏设置
+                if let Some(capture_settings) = initial_config.capture_settings.clone() {
+                    capture.update_settings(capture_settings.clone()).await;
+                    info!("已加载截屏配置: {:?}", capture_settings);
+                }
 
                 // 从配置加载LLM设置
                 if let Some(llm_config) = initial_config.llm_config.clone() {

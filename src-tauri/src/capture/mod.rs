@@ -9,6 +9,7 @@ use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
+use crate::models::CaptureSettings;
 
 #[cfg(not(target_os = "macos"))]
 use tracing::debug;
@@ -34,6 +35,8 @@ pub struct ScreenCapture {
     output_dir: PathBuf,
     /// 当前会话的帧数据
     current_session: Arc<Mutex<Vec<ScreenFrame>>>,
+    /// 截屏配置
+    capture_settings: Arc<Mutex<CaptureSettings>>,
 }
 
 impl ScreenCapture {
@@ -60,7 +63,15 @@ impl ScreenCapture {
             screens,
             output_dir,
             current_session: Arc::new(Mutex::new(Vec::new())),
+            capture_settings: Arc::new(Mutex::new(CaptureSettings::default())),
         })
+    }
+
+    /// 更新截屏配置
+    pub async fn update_settings(&self, settings: CaptureSettings) {
+        let mut current = self.capture_settings.lock().await;
+        *current = settings;
+        info!("截屏配置已更新: {:?}", *current);
     }
 
     /// 检测系统是否处于锁屏状态
@@ -150,6 +161,51 @@ impl ScreenCapture {
         false
     }
 
+    /// 检测图像是否为黑屏
+    async fn is_black_screen(&self, img: &DynamicImage) -> bool {
+        let settings = self.capture_settings.lock().await;
+
+        if !settings.detect_black_screen {
+            return false;
+        }
+
+        // 获取图像尺寸
+        let (width, height) = (img.width(), img.height());
+
+        // 采样检测：每隔10个像素采样一次，提高性能
+        let sample_step = 10;
+        let mut total_brightness = 0u64;
+        let mut sample_count = 0u64;
+
+        // 转换为RGB8格式进行处理
+        let rgb_img = img.to_rgb8();
+
+        for y in (0..height).step_by(sample_step) {
+            for x in (0..width).step_by(sample_step) {
+                let pixel = rgb_img.get_pixel(x, y);
+                // 计算亮度（简单平均）
+                let brightness = (pixel[0] as u64 + pixel[1] as u64 + pixel[2] as u64) / 3;
+                total_brightness += brightness;
+                sample_count += 1;
+            }
+        }
+
+        if sample_count == 0 {
+            return true; // 无效图像视为黑屏
+        }
+
+        let avg_brightness = total_brightness / sample_count;
+
+        // 使用配置的阈值判断是否为黑屏
+        let is_black = avg_brightness < settings.black_screen_threshold as u64;
+
+        if is_black {
+            info!("检测到黑屏图像（平均亮度: {}, 阈值: {}）", avg_brightness, settings.black_screen_threshold);
+        }
+
+        is_black
+    }
+
     /// 捕获单个帧
     pub async fn capture_frame(&self) -> Result<ScreenFrame> {
         let timestamp = Utc::now();
@@ -179,14 +235,26 @@ impl ScreenCapture {
 
         let combined = self.combine_screens(captures)?;
 
-        // 调整分辨率到1920x1080
-        let resized = self.resize_image(combined, 1920, 1080)?;
+        // 根据配置调整分辨率
+        let settings = self.capture_settings.lock().await.clone();
+        let resized = if let Some((width, height)) = settings.resolution.dimensions() {
+            self.resize_image(combined, width, height)?
+        } else {
+            // 原始分辨率，不调整
+            combined
+        };
+
+        // 检测是否为黑屏
+        if self.is_black_screen(&resized).await {
+            info!("检测到黑屏，跳过保存");
+            return Err(anyhow::anyhow!("黑屏图像，已跳过"));
+        }
 
         // 生成文件名
         let file_name = format!("{}.jpg", timestamp.timestamp_millis());
         let file_path = self.output_dir.join(&file_name);
 
-        // 保存为JPEG格式
+        // 保存为JPEG格式，使用配置的质量
         resized.save_with_format(&file_path, ImageFormat::Jpeg)?;
 
         let frame = ScreenFrame {
