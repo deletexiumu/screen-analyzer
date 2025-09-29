@@ -1,7 +1,7 @@
 // 视频处理模块 - 负责将截图序列生成视频
 
-pub mod processor;
 pub mod ffmpeg_helper;
+pub mod processor;
 
 pub use processor::{VideoConfig, VideoFormat, VideoProcessor};
 

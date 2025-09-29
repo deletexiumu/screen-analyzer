@@ -120,7 +120,9 @@
                 :class="{ 'is-merged': card.mergedCount && card.mergedCount > 1 }"
                 :style="getTimelineCardStyle(card)"
                 @click="selectTimelineCard(card)"
-                :title="card.title || card.summary"
+                @mouseenter="(e) => handleCardMouseEnter(e, card)"
+                @mouseleave="hoveredCard = null"
+                @mousemove="(e) => updateCardTooltipPosition(e)"
               >
                 <div class="block-content">
                 <div class="block-header">
@@ -157,35 +159,63 @@
     <!-- 悬浮提示框 -->
     <transition name="fade">
       <div
-        v-if="hoveredSession"
+        v-if="hoveredSession || hoveredCard"
         class="session-tooltip"
         :style="tooltipStyle"
       >
-        <div class="tooltip-header">
-          <h4>{{ hoveredSession.title }}</h4>
-          <el-tag size="small" :color="getSessionColor(hoveredSession)">
-            {{ getCategoryName(parseSessionTags(hoveredSession.tags)[0]?.category) }}
-          </el-tag>
-        </div>
-        <div class="tooltip-summary">{{ hoveredSession.summary }}</div>
-        <div class="tooltip-meta">
-          <div class="tooltip-duration">
-            <el-icon><Timer /></el-icon>
-            {{ formatDuration(hoveredSession.start_time, hoveredSession.end_time) }}
+        <!-- 会话悬浮提示 -->
+        <template v-if="hoveredSession">
+          <div class="tooltip-header">
+            <h4>{{ hoveredSession.title }}</h4>
+            <el-tag size="small" :color="getSessionColor(hoveredSession)">
+              {{ getCategoryName(parseSessionTags(hoveredSession.tags)[0]?.category) }}
+            </el-tag>
           </div>
-        </div>
-        <div class="tooltip-actions">
-          <el-button size="small" @click.stop="viewDetail(hoveredSession)">
-            查看详情
-          </el-button>
-          <el-button
-            v-if="!hoveredSession.video_path"
-            size="small"
-            @click.stop="generateVideo(hoveredSession)"
-          >
-            生成视频
-          </el-button>
-        </div>
+          <div class="tooltip-summary">{{ hoveredSession.summary }}</div>
+          <div class="tooltip-meta">
+            <div class="tooltip-duration">
+              <el-icon><Timer /></el-icon>
+              {{ formatDuration(hoveredSession.start_time, hoveredSession.end_time) }}
+            </div>
+          </div>
+          <div class="tooltip-actions">
+            <el-button size="small" @click.stop="viewDetail(hoveredSession)">
+              查看详情
+            </el-button>
+            <el-button
+              v-if="!hoveredSession.video_path"
+              size="small"
+              @click.stop="generateVideo(hoveredSession)"
+            >
+              生成视频
+            </el-button>
+          </div>
+        </template>
+
+        <!-- 时间线卡片悬浮提示 -->
+        <template v-if="hoveredCard && !hoveredSession">
+          <div class="tooltip-header">
+            <h4>{{ getCardDisplayTitle(hoveredCard) }}</h4>
+            <el-tag size="small" :color="getCategoryColor(hoveredCard.category || 'Other')">
+              {{ getCategoryName(hoveredCard.category || 'Other') }}
+            </el-tag>
+            <span v-if="hoveredCard.mergedCount > 1" class="tooltip-merged-count">
+              ×{{ hoveredCard.mergedCount }}
+            </span>
+          </div>
+          <div v-if="hoveredCard.summary" class="tooltip-summary">{{ hoveredCard.summary }}</div>
+          <div class="tooltip-meta">
+            <div class="tooltip-duration">
+              <el-icon><Timer /></el-icon>
+              {{ formatDuration(hoveredCard.start_time, hoveredCard.end_time) }}
+            </div>
+          </div>
+          <div class="tooltip-actions">
+            <el-button size="small" @click.stop="selectTimelineCard(hoveredCard)">
+              查看详情
+            </el-button>
+          </div>
+        </template>
       </div>
     </transition>
   </div>
@@ -215,6 +245,9 @@ const regeneratingTimeline = ref(false)
 
 // 悬浮的会话
 const hoveredSession = ref(null)
+
+// 悬浮的时间线卡片
+const hoveredCard = ref(null)
 
 // 提示框样式
 const tooltipStyle = ref({})
@@ -372,25 +405,39 @@ const rawTimelineCards = computed(() => {
   return uniqueCards.sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
 })
 
+// 过滤后的时间线卡片（移除空闲状态）
+const filteredTimelineCards = computed(() => {
+  if (rawTimelineCards.value.length === 0) {
+    return []
+  }
+
+  return rawTimelineCards.value.filter(card => {
+    const category = (card.category || 'Other').toLowerCase()
+    return category !== 'idle'
+  })
+})
+
 // 是否需要回退到会话区块展示
 const showSessionFallback = computed(() => {
-  return rawTimelineCards.value.length === 0 && sessions.value.length > 0
+  return sessions.value.length > 0 && filteredTimelineCards.value.length === 0
 })
 
 // 显示的时间线卡片（根据是否聚合返回不同的数据）
 const displayTimelineCards = computed(() => {
-  if (rawTimelineCards.value.length === 0) {
+  const cards = filteredTimelineCards.value
+
+  if (cards.length === 0) {
     return []
   }
 
   // 如果启用聚合，合并相同标题的卡片
   if (enableAggregation.value) {
-    const mergedCards = mergeTimelineCardsByTitle(rawTimelineCards.value)
+    const mergedCards = mergeTimelineCardsByTitle(cards)
     return applyTimelineCardLayout(mergedCards)
   }
 
   // 不聚合时，直接返回应用布局后的卡片
-  return applyTimelineCardLayout(rawTimelineCards.value)
+  return applyTimelineCardLayout(cards)
 })
 
 // 聚合统计信息
@@ -736,52 +783,67 @@ const getTimelineCardStyle = (card) => {
   const height = card._height ?? Math.max(endPos - startPos, MIN_CARD_HEIGHT)
   const color = getCategoryColor(card.category || 'Other')
 
-  if (enableAggregation.value) {
-    return {
-      top: `${startPos}px`,
-      height: `${height}px`,
-      backgroundColor: color + '20',
-      borderColor: color,
-      borderLeftColor: color,
-      left: '0',
-      width: '100%',
-      zIndex: 3
-    }
-  }
-
-  const totalColumns = Math.max(card._totalColumns || 1, (card._column || 0) + 1)
-  const columnGap = totalColumns > 1 ? TIMELINE_COLUMN_GAP_PERCENT : 0
-  const columnWidth = (100 - columnGap * (totalColumns - 1)) / totalColumns
-  const safeColumnWidth = Math.max(columnWidth, 0)
-  const leftPos = (card._column || 0) * (safeColumnWidth + columnGap)
-
   return {
     top: `${startPos}px`,
     height: `${height}px`,
     backgroundColor: color + '20', // 20%透明度
     borderColor: color,
     borderLeftColor: color,
-    left: `${leftPos}%`,
-    width: `${safeColumnWidth}%`,
-    zIndex: 3 + (card._column || 0)
+    left: '0',
+    width: '100%',
+    zIndex: 3
   }
 }
 
 // 选择时间线卡片
-const selectTimelineCard = (card) => {
+const selectTimelineCard = async (card) => {
   // 可以显示卡片详情
   console.log('选中时间线卡片:', card)
   const displayTitle = card.title || (card.summary ? card.summary.substring(0, 30) + '...' : '未命名活动')
   const mergedSuffix = card.mergedCount > 1 ? ` ×${card.mergedCount}` : ''
-  ElMessage.info(`活动: ${displayTitle}${mergedSuffix}`)
+
+  // 获取所有相关的会话ID
   const candidateSessionIds = Array.isArray(card.sessionIds) && card.sessionIds.length > 0
     ? card.sessionIds
     : (card.sessionId ? [card.sessionId] : [])
-  const targetSessionId = candidateSessionIds[0]
-  if (targetSessionId) {
-    const session = sessions.value.find(s => s.id === targetSessionId)
-    if (session) {
-      selectSession(session)
+
+  // 如果是聚合卡片且有多个会话，询问是否批量生成视频
+  if (candidateSessionIds.length > 1) {
+    try {
+      await ElMessageBox.confirm(
+        `该活动包含 ${candidateSessionIds.length} 个会话段，是否批量生成视频并清理无效会话？`,
+        `批量处理: ${displayTitle}`,
+        {
+          confirmButtonText: '批量处理',
+          cancelButtonText: '查看详情',
+          type: 'info',
+          distinguishCancelAndClose: true
+        }
+      )
+
+      // 用户选择批量处理
+      await batchProcessMergedSessions(card, candidateSessionIds)
+    } catch (action) {
+      if (action === 'cancel') {
+        // 用户选择查看详情
+        const targetSessionId = candidateSessionIds[0]
+        if (targetSessionId) {
+          const session = sessions.value.find(s => s.id === targetSessionId)
+          if (session) {
+            selectSession(session)
+          }
+        }
+      }
+    }
+  } else {
+    // 单个会话，直接显示详情
+    ElMessage.info(`活动: ${displayTitle}${mergedSuffix}`)
+    const targetSessionId = candidateSessionIds[0]
+    if (targetSessionId) {
+      const session = sessions.value.find(s => s.id === targetSessionId)
+      if (session) {
+        selectSession(session)
+      }
     }
   }
 }
@@ -859,15 +921,23 @@ const getCategoryTagType = (category) => {
   return types[category] || 'info'
 }
 
-// 处理鼠标移入
+// 处理鼠标移入会话
 const handleMouseEnter = (event, session) => {
   hoveredSession.value = session
+  hoveredCard.value = null
+  updateTooltipPosition(event)
+}
+
+// 处理鼠标移入时间线卡片
+const handleCardMouseEnter = (event, card) => {
+  hoveredCard.value = card
+  hoveredSession.value = null
   updateTooltipPosition(event)
 }
 
 // 更新提示框位置 - 跟随鼠标位置
 const updateTooltipPosition = (event) => {
-  if (!hoveredSession.value) return
+  if (!hoveredSession.value && !hoveredCard.value) return
 
   // 提示框在鼠标右侧显示
   const mouseX = event.clientX
@@ -889,6 +959,9 @@ const updateTooltipPosition = (event) => {
     left: `${left}px`
   }
 }
+
+// 更新卡片提示框位置
+const updateCardTooltipPosition = updateTooltipPosition
 
 // 类别映射配置（支持新旧类别）
 const categoryConfig = {
@@ -985,6 +1058,68 @@ const viewDetail = (session) => {
 }
 
 
+// 批量处理聚合的会话
+const batchProcessMergedSessions = async (card, sessionIds) => {
+  const displayTitle = card.title || card.summary || '未命名活动'
+  let deletedCount = 0
+  let successCount = 0
+  let errors = []
+
+  const loading = ElMessage({
+    message: `正在批量处理 ${sessionIds.length} 个会话...`,
+    type: 'info',
+    duration: 0 // 不自动关闭
+  })
+
+  for (const sessionId of sessionIds) {
+    try {
+      // 使用静默模式生成视频，避免重复提示
+      await store.generateVideo(sessionId, 20, true)
+      successCount++
+    } catch (error) {
+      if (error?.type === 'SESSION_DELETED') {
+        deletedCount++
+      } else {
+        errors.push(`会话 ${sessionId}: ${error}`)
+      }
+    }
+  }
+
+  // 关闭加载提示
+  loading.close()
+
+  // 刷新会话列表
+  await refreshSessions()
+
+  // 刷新月度活动数据（日历组件需要）
+  const current = dayjs(props.date)
+  const startDate = current.startOf('month').format('YYYY-MM-DD')
+  const endDate = current.endOf('month').format('YYYY-MM-DD')
+  await store.fetchActivities(startDate, endDate)
+
+  // 显示处理结果汇总
+  const results = []
+  if (successCount > 0) {
+    results.push(`${successCount} 个视频生成成功`)
+  }
+  if (deletedCount > 0) {
+    results.push(`${deletedCount} 个空会话已清理`)
+  }
+  if (errors.length > 0) {
+    results.push(`${errors.length} 个处理失败`)
+    console.error('批量处理错误:', errors)
+  }
+
+  if (results.length > 0) {
+    const message = `处理完成：${results.join('，')}`
+    if (errors.length > 0) {
+      ElMessage.warning(message)
+    } else {
+      ElMessage.success(message)
+    }
+  }
+}
+
 // 生成视频
 const generateVideo = async (session) => {
   try {
@@ -1007,6 +1142,13 @@ const generateVideo = async (session) => {
   } catch (error) {
     if (error !== 'cancel') {
       console.error('Failed to generate video:', error)
+
+      // 如果会话已被删除，隐藏悬浮提示框并刷新
+      if (error?.type === 'SESSION_DELETED') {
+        hoveredSession.value = null
+        // 刷新会话列表
+        await refreshSessions()
+      }
     }
   }
 }
@@ -1186,6 +1328,13 @@ onUnmounted(() => {
 // 监听悬浮会话变化，初始化提示框
 watch(hoveredSession, (newSession) => {
   if (!newSession) {
+    tooltipStyle.value = {}
+  }
+})
+
+// 监听悬浮卡片变化，初始化提示框
+watch(hoveredCard, (newCard) => {
+  if (!newCard) {
     tooltipStyle.value = {}
   }
 })
@@ -1567,6 +1716,16 @@ watch(hoveredSession, (newSession) => {
   margin: 0;
   color: #303133;
   font-size: 16px;
+}
+
+.tooltip-merged-count {
+  background: #e6a23c;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+  font-weight: bold;
 }
 
 .tooltip-summary {

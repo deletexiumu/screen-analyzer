@@ -3,8 +3,8 @@
 use super::plugin::*;
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::Timelike;
 use base64::{engine::general_purpose, Engine as _};
+use chrono::Timelike;
 use chrono::Utc;
 use reqwest::{multipart, Client};
 use serde::Deserialize;
@@ -746,7 +746,11 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
     fn parse_time_str(time_str: &str) -> Option<chrono::NaiveTime> {
         // 尝试解析 "HH:MM AM/PM" 格式
         if time_str.contains("AM") || time_str.contains("PM") {
-            let cleaned = time_str.replace("AM", "").replace("PM", "").trim().to_string();
+            let cleaned = time_str
+                .replace("AM", "")
+                .replace("PM", "")
+                .trim()
+                .to_string();
             if let Ok(mut time) = chrono::NaiveTime::parse_from_str(&cleaned, "%I:%M") {
                 if time_str.contains("PM") && time.hour() < 12 {
                     time = time + chrono::Duration::hours(12);
@@ -772,8 +776,10 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
 
     /// 检查两个时间是否连续（间隔小于5分钟）
     fn is_time_continuous(end_time_str: &str, start_time_str: &str) -> bool {
-        if let (Some(end_time), Some(start_time)) =
-            (Self::parse_time_str(end_time_str), Self::parse_time_str(start_time_str)) {
+        if let (Some(end_time), Some(start_time)) = (
+            Self::parse_time_str(end_time_str),
+            Self::parse_time_str(start_time_str),
+        ) {
             let diff = if start_time >= end_time {
                 start_time - end_time
             } else {
@@ -798,23 +804,19 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
 
         for next_card in cards.into_iter().skip(1) {
             // 检查是否可以合并：时间连续且类别相同
-            if Self::is_time_continuous(&current.end_time, &next_card.start_time) &&
-               current.category == next_card.category &&
-               current.subcategory == next_card.subcategory {
+            if Self::is_time_continuous(&current.end_time, &next_card.start_time)
+                && current.category == next_card.category
+                && current.subcategory == next_card.subcategory
+            {
                 // 合并卡片
                 current.end_time = next_card.end_time;
                 current.detailed_summary = format!(
                     "{}；{}",
-                    current.detailed_summary,
-                    next_card.detailed_summary
+                    current.detailed_summary, next_card.detailed_summary
                 );
                 // 保持简洁的摘要
                 if !current.summary.contains(&next_card.summary) {
-                    current.summary = format!(
-                        "持续{}: {}",
-                        current.category,
-                        current.title
-                    );
+                    current.summary = format!("持续{}: {}", current.category, current.title);
                 }
             } else {
                 // 不能合并，保存当前卡片并开始新的
@@ -826,7 +828,11 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         // 添加最后一个卡片
         merged.push(current);
 
-        info!("卡片合并: 原始 {} 张，合并后 {} 张", card_count, merged.len());
+        info!(
+            "卡片合并: 原始 {} 张，合并后 {} 张",
+            card_count,
+            merged.len()
+        );
         merged
     }
 
@@ -845,29 +851,26 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         let prev_cards = previous_cards.as_ref().unwrap();
 
         // 如果有历史卡片，尝试将第一张新卡片与最后一张历史卡片合并
-        let mut result = prev_cards[..prev_cards.len()-1].to_vec();
+        let mut result = prev_cards[..prev_cards.len() - 1].to_vec();
         let last_prev = &prev_cards[prev_cards.len() - 1];
 
         if !merged_new.is_empty() {
             let first_new = &merged_new[0];
 
             // 检查是否可以合并最后一张历史卡片和第一张新卡片
-            if Self::is_time_continuous(&last_prev.end_time, &first_new.start_time) &&
-               last_prev.category == first_new.category &&
-               last_prev.subcategory == first_new.subcategory {
+            if Self::is_time_continuous(&last_prev.end_time, &first_new.start_time)
+                && last_prev.category == first_new.category
+                && last_prev.subcategory == first_new.subcategory
+            {
                 // 合并
                 let mut merged_card = last_prev.clone();
                 merged_card.end_time = first_new.end_time.clone();
                 merged_card.detailed_summary = format!(
                     "{}；{}",
-                    last_prev.detailed_summary,
-                    first_new.detailed_summary
+                    last_prev.detailed_summary, first_new.detailed_summary
                 );
-                merged_card.summary = format!(
-                    "持续{}: {}",
-                    merged_card.category,
-                    merged_card.title
-                );
+                merged_card.summary =
+                    format!("持续{}: {}", merged_card.category, merged_card.title);
                 result.push(merged_card);
 
                 // 添加剩余的新卡片
@@ -956,7 +959,7 @@ impl LLMProvider for QwenProvider {
 - personal: 个人事务（个人生活相关事务处理）
 - idle: 空闲（无具体活动、等待状态）
 - other: 其他（未分类的其他活动）"#
-        .to_string();
+            .to_string();
 
         let response = self
             .call_qwen_api(prompt, images_base64, "analyze_frames")

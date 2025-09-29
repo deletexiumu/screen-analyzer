@@ -25,7 +25,7 @@ serde_json = "1"
 
 # 添加我们需要的依赖
 tokio = { version = "1", features = ["full"] }
-screenshots = "0.8"
+screenshots = "0.8.10"
 image = "0.24"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -37,7 +37,6 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 cron = "0.12"  # 定时任务
 uuid = { version = "1.0", features = ["v4"] }  # 生成唯一ID
-mouse_position = "0.1"  # 跨平台获取鼠标位置
 
 [dev-dependencies]
 tempfile = "3.23.0"

@@ -500,10 +500,8 @@ const previewFrame = (frame) => {
 }
 
 // 移除标签
-const removeTag = (index) => {
-  const newTags = [...session.value.tags]
-  newTags.splice(index, 1)
-  // TODO: 更新到后端
+const removeTag = async (index) => {
+  await store.removeTag(session.value.session.id, index)
 }
 
 // 添加标签
@@ -520,6 +518,13 @@ const generateVideo = async () => {
     ElMessage.success('视频已生成并可播放')
   } catch (error) {
     console.error('生成视频失败:', error)
+    // 如果会话已被删除，关闭对话框
+    if (error?.type === 'SESSION_DELETED') {
+      // 触发关闭事件
+      emit('close')
+      // 关闭对话框
+      emit('update:modelValue', false)
+    }
   }
 }
 

@@ -265,6 +265,11 @@ export const useActivityStore = defineStore('activity', {
         await invoke('delete_session', { sessionId })
         // 刷新列表
         await this.fetchDaySessions(this.selectedDate)
+        // 刷新月度活动数据
+        const current = dayjs(this.selectedDate)
+        const startDate = current.startOf('month').format('YYYY-MM-DD')
+        const endDate = current.endOf('month').format('YYYY-MM-DD')
+        await this.fetchActivities(startDate, endDate)
         // 清空选中的会话详情
         if (this.selectedSession?.session?.id === sessionId) {
           this.selectedSession = null
@@ -276,16 +281,43 @@ export const useActivityStore = defineStore('activity', {
     },
 
     // 生成视频
-    async generateVideo(sessionId, speedMultiplier = 20) {
+    async generateVideo(sessionId, speedMultiplier = 20, silent = false) {
       try {
         const videoPath = await invoke('generate_video', {
           sessionId,
           speedMultiplier
         })
-        ElMessage.success('视频生成成功')
+        if (!silent) {
+          ElMessage.success('视频生成成功')
+        }
         return videoPath
       } catch (error) {
-        ElMessage.error('生成视频失败: ' + error)
+        const errorMsg = error.toString()
+
+        // 检查是否因为会话被删除而失败
+        if (errorMsg.includes('该会话没有截图帧') || errorMsg.includes('会话已删除') || errorMsg.includes('删除该会话')) {
+          // 静默模式下不刷新列表（批量处理时统一刷新）
+          if (!silent) {
+            // 刷新当天的会话列表
+            await this.fetchDaySessions(this.selectedDate)
+            // 刷新月度活动数据
+            const current = dayjs(this.selectedDate)
+            const startDate = current.startOf('month').format('YYYY-MM-DD')
+            const endDate = current.endOf('month').format('YYYY-MM-DD')
+            await this.fetchActivities(startDate, endDate)
+            // 清空选中的会话
+            if (this.selectedSession?.session?.id === sessionId) {
+              this.selectedSession = null
+            }
+            ElMessage.warning('该会话没有截图帧，已被自动删除')
+          }
+          // 抛出特定错误以便调用方知道会话已被刐除
+          throw { type: 'SESSION_DELETED', message: errorMsg }
+        }
+
+        if (!silent) {
+          ElMessage.error('生成视频失败: ' + error)
+        }
         console.error('Failed to generate video:', error)
         throw error
       }
@@ -350,6 +382,21 @@ export const useActivityStore = defineStore('activity', {
       } catch (error) {
         ElMessage.error('添加标签失败: ' + error)
         console.error('Failed to add manual tag:', error)
+      }
+    },
+
+    // 删除标签
+    async removeTag(sessionId, tagIndex) {
+      try {
+        await invoke('remove_tag', { sessionId, tagIndex })
+        ElMessage.success('标签已删除')
+        // 刷新会话详情
+        if (this.selectedSession?.session?.id === sessionId) {
+          await this.fetchSessionDetail(sessionId)
+        }
+      } catch (error) {
+        ElMessage.error('删除标签失败: ' + error)
+        console.error('Failed to remove tag:', error)
       }
     },
 

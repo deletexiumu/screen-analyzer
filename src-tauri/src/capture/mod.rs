@@ -2,14 +2,16 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use image::{DynamicImage, ImageFormat};
-use mouse_position::mouse_position::Mouse;
-use screenshots::Screen;
+use image::{imageops, DynamicImage, ImageFormat};
+use screenshots::{display_info::DisplayInfo, Screen};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
+
+#[cfg(not(target_os = "macos"))]
+use tracing::debug;
 
 pub mod scheduler;
 
@@ -50,11 +52,7 @@ impl ScreenCapture {
             let display_info = screen.display_info;
             info!(
                 "屏幕 #{}: {}x{} @ ({}, {})",
-                index,
-                display_info.width,
-                display_info.height,
-                display_info.x,
-                display_info.y
+                index, display_info.width, display_info.height, display_info.x, display_info.y
             );
         }
 
@@ -156,18 +154,33 @@ impl ScreenCapture {
     pub async fn capture_frame(&self) -> Result<ScreenFrame> {
         let timestamp = Utc::now();
 
-        // 获取要截图的屏幕
-        let (target_screen, screen_id) = self.get_target_screen()?;
+        if self.screens.is_empty() {
+            return Err(anyhow::anyhow!("未找到可用屏幕"));
+        }
 
-        // 截屏
-        let image = target_screen.capture()?;
-        let (_width, _height) = (image.width(), image.height());
+        let mut captures = Vec::new();
 
-        // 转换为DynamicImage
-        let dynamic_image = DynamicImage::ImageRgba8(image);
+        for (index, screen) in self.screens.iter().enumerate() {
+            match screen.capture() {
+                Ok(image) => {
+                    let info = screen.display_info;
+                    captures.push((info, DynamicImage::ImageRgba8(image)));
+                    trace!("截取屏幕 #{} 成功", index);
+                }
+                Err(err) => {
+                    warn!("截取屏幕 #{} 失败: {}", index, err);
+                }
+            }
+        }
+
+        if captures.is_empty() {
+            return Err(anyhow::anyhow!("未能获取到任何屏幕截图"));
+        }
+
+        let combined = self.combine_screens(captures)?;
 
         // 调整分辨率到1920x1080
-        let resized = self.resize_image(dynamic_image, 1920, 1080)?;
+        let resized = self.resize_image(combined, 1920, 1080)?;
 
         // 生成文件名
         let file_name = format!("{}.jpg", timestamp.timestamp_millis());
@@ -179,62 +192,98 @@ impl ScreenCapture {
         let frame = ScreenFrame {
             timestamp,
             file_path: file_path.to_string_lossy().to_string(),
-            screen_id,
+            screen_id: 0,
         };
 
         // 添加到当前会话
         self.current_session.lock().await.push(frame.clone());
 
-        trace!("截屏保存成功: {} (屏幕 #{})", frame.file_path, screen_id);
+        trace!("截屏保存成功: {}", frame.file_path);
         Ok(frame)
     }
 
-    /// 获取要截图的目标屏幕
-    /// 优先级：1. 鼠标所在屏幕 2. 主屏幕（第一个屏幕）
-    fn get_target_screen(&self) -> Result<(&Screen, usize)> {
-        // 如果只有一个屏幕，直接返回
-        if self.screens.len() == 1 {
-            return self.screens.first()
-                .map(|s| (s, 0))
-                .ok_or_else(|| anyhow::anyhow!("未找到可用屏幕"));
+    fn combine_screens(&self, captures: Vec<(DisplayInfo, DynamicImage)>) -> Result<DynamicImage> {
+        if captures.is_empty() {
+            return Err(anyhow::anyhow!("没有可合成的屏幕图像"));
         }
 
-        // 尝试获取鼠标位置
-        let mouse_pos = match Mouse::get_mouse_position() {
-            Mouse::Position { x, y } => {
-                trace!("鼠标位置: ({}, {})", x, y);
-                Some((x, y))
-            }
-            Mouse::Error => {
-                warn!("无法获取鼠标位置，将使用主屏幕");
-                None
-            }
-        };
-
-        // 如果获取到鼠标位置，找到对应屏幕
-        if let Some((mouse_x, mouse_y)) = mouse_pos {
-            for (index, screen) in self.screens.iter().enumerate() {
-                let display_info = screen.display_info;
-
-                // 检查鼠标是否在当前屏幕范围内
-                if mouse_x >= display_info.x as i32
-                    && mouse_x < (display_info.x + display_info.width as i32)
-                    && mouse_y >= display_info.y as i32
-                    && mouse_y < (display_info.y + display_info.height as i32) {
-                    trace!("鼠标在屏幕 #{} 上 ({}x{} at {},{}))",
-                        index, display_info.width, display_info.height, display_info.x, display_info.y);
-                    return Ok((screen, index));
-                }
-            }
-
-            // 鼠标不在任何屏幕范围内（可能在屏幕之间），使用主屏幕
-            warn!("鼠标位置 ({}, {}) 不在任何屏幕范围内，使用主屏幕", mouse_x, mouse_y);
+        struct Region {
+            x: i64,
+            y: i64,
+            width: u32,
+            height: u32,
+            image: DynamicImage,
         }
 
-        // 默认返回主屏幕（第一个屏幕）
-        self.screens.first()
-            .map(|s| (s, 0))
-            .ok_or_else(|| anyhow::anyhow!("未找到可用屏幕"))
+        let mut regions: Vec<Region> = Vec::with_capacity(captures.len());
+
+        for (info, image) in captures {
+            let (img_w, img_h) = (image.width(), image.height());
+
+            let scale_x = if info.width > 0 {
+                img_w as f32 / info.width as f32
+            } else {
+                info.scale_factor.max(1.0)
+            };
+            let scale_y = if info.height > 0 {
+                img_h as f32 / info.height as f32
+            } else {
+                info.scale_factor.max(1.0)
+            };
+
+            let mut scale = if scale_x.is_finite() && scale_x > 0.0 {
+                scale_x
+            } else if scale_y.is_finite() && scale_y > 0.0 {
+                scale_y
+            } else {
+                info.scale_factor.max(1.0)
+            };
+
+            if !scale.is_finite() || scale <= 0.0 {
+                scale = 1.0;
+            }
+
+            let pixel_x = ((info.x as f32) * scale).round() as i64;
+            let pixel_y = ((info.y as f32) * scale).round() as i64;
+
+            regions.push(Region {
+                x: pixel_x,
+                y: pixel_y,
+                width: img_w,
+                height: img_h,
+                image,
+            });
+        }
+
+        let min_x = regions.iter().map(|region| region.x).min().unwrap_or(0);
+        let min_y = regions.iter().map(|region| region.y).min().unwrap_or(0);
+        let max_x = regions
+            .iter()
+            .map(|region| region.x + region.width as i64)
+            .max()
+            .unwrap_or(min_x);
+        let max_y = regions
+            .iter()
+            .map(|region| region.y + region.height as i64)
+            .max()
+            .unwrap_or(min_y);
+
+        let canvas_width = (max_x - min_x).max(0) as u32;
+        let canvas_height = (max_y - min_y).max(0) as u32;
+
+        if canvas_width == 0 || canvas_height == 0 {
+            return Err(anyhow::anyhow!("屏幕尺寸无效"));
+        }
+
+        let mut canvas = DynamicImage::new_rgba8(canvas_width, canvas_height);
+
+        for region in regions {
+            let offset_x = (region.x - min_x) as i64;
+            let offset_y = (region.y - min_y) as i64;
+            imageops::overlay(&mut canvas, &region.image, offset_x, offset_y);
+        }
+
+        Ok(canvas)
     }
 
     /// 调整图像尺寸

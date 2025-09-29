@@ -361,7 +361,8 @@ async fn get_video_data(
 
     if let Some(video_path) = session.session.video_path {
         // 读取视频文件
-        let data = fs::read(&video_path).await
+        let data = fs::read(&video_path)
+            .await
             .map_err(|e| format!("读取视频文件失败: {}", e))?;
         Ok(data)
     } else {
@@ -440,18 +441,20 @@ async fn generate_video(
         let mut minute_groups = std::collections::HashMap::new();
         for (i, frame) in all_frames.iter().enumerate() {
             let minute = frame.timestamp.minute();
-            minute_groups.entry(minute).or_insert(Vec::new()).push((i, frame));
+            minute_groups
+                .entry(minute)
+                .or_insert(Vec::new())
+                .push((i, frame));
         }
 
         // 对每个分钟组，找到距离关键时间点最近的帧
         for (_minute, frames) in minute_groups.iter() {
             for &key_sec in &key_seconds {
-                if let Some((idx, _frame)) = frames.iter()
-                    .min_by_key(|(_, f)| {
-                        let sec = f.timestamp.second() as i32;
-                        // 计算距离关键时间点的最小距离
-                        (sec - key_sec as i32).abs()
-                    }) {
+                if let Some((idx, _frame)) = frames.iter().min_by_key(|(_, f)| {
+                    let sec = f.timestamp.second() as i32;
+                    // 计算距离关键时间点的最小距离
+                    (sec - key_sec as i32).abs()
+                }) {
                     selected_indices.insert(*idx);
                 }
             }
@@ -470,7 +473,8 @@ async fn generate_video(
 
             // 检查与上一个添加帧的时间间隔
             if let Some(last_time) = last_added_timestamp {
-                let time_diff_ms = frame.timestamp.timestamp_millis() - last_time.timestamp_millis();
+                let time_diff_ms =
+                    frame.timestamp.timestamp_millis() - last_time.timestamp_millis();
                 if time_diff_ms >= 5000 {
                     // 间隔大于等于5秒，添加此帧
                     sampled.push((i, frame.file_path.clone()));
@@ -491,17 +495,22 @@ async fn generate_video(
             }
         }
 
-        info!("视频抽帧：原始 {} 帧，抽样后 {} 帧（基于时间戳，5秒间隔+关键时间点）",
-              all_frames.len(), result.len());
+        info!(
+            "视频抽帧：原始 {} 帧，抽样后 {} 帧（基于时间戳，5秒间隔+关键时间点）",
+            all_frames.len(),
+            result.len()
+        );
 
         // 打印调试信息：显示选中的帧的时间戳
         for (i, frame) in all_frames.iter().enumerate() {
             if result.contains(&frame.file_path) {
-                debug!("选中帧 {}: 时间 {}:{}:{}",
-                      i,
-                      frame.timestamp.minute(),
-                      frame.timestamp.second(),
-                      frame.timestamp.timestamp_subsec_millis());
+                debug!(
+                    "选中帧 {}: 时间 {}:{}:{}",
+                    i,
+                    frame.timestamp.minute(),
+                    frame.timestamp.second(),
+                    frame.timestamp.timestamp_subsec_millis()
+                );
             }
         }
 
@@ -540,7 +549,17 @@ async fn generate_video(
             e.to_string()
         })?;
 
-    info!("视频生成成功并已更新数据库: {}", result.file_path);
+    // 清理frame文件夹中的图片（视频已生成，不再需要原始图片）
+    for frame in all_frames {
+        if let Err(e) = tokio::fs::remove_file(&frame.file_path).await {
+            debug!("清理frame文件失败 {}: {}", frame.file_path, e);
+        }
+    }
+    info!(
+        "视频生成成功并已更新数据库，清理了 {} 个frame文件",
+        all_frames.len()
+    );
+
     Ok(result.file_path)
 }
 
@@ -968,10 +987,7 @@ async fn regenerate_timeline(
         let app_config = state.settings.get().await;
         let speed_multiplier = app_config.video_config.speed_multiplier;
         llm_manager.set_video_speed(speed_multiplier);
-        let timeline_cards = match llm_manager
-            .generate_timeline(video_segments, None)
-            .await
-        {
+        let timeline_cards = match llm_manager.generate_timeline(video_segments, None).await {
             Ok(cards) => cards,
             Err(e) => {
                 error!("生成timeline失败: {}", e);
@@ -990,11 +1006,15 @@ async fn regenerate_timeline(
                 .iter()
                 .map(|card| {
                     // 处理时间格式：如果是相对时间（如 "10:00 AM"），需要转换为绝对时间
-                    let (start_time, end_time) = if card.start_time.contains("AM") || card.start_time.contains("PM")
-                        || !card.start_time.contains("T") {
+                    let (start_time, end_time) = if card.start_time.contains("AM")
+                        || card.start_time.contains("PM")
+                        || !card.start_time.contains("T")
+                    {
                         // 是相对时间，需要转换
-                        let start_abs = llm::relative_to_absolute(session_start, session_end, &card.start_time);
-                        let end_abs = llm::relative_to_absolute(session_start, session_end, &card.end_time);
+                        let start_abs =
+                            llm::relative_to_absolute(session_start, session_end, &card.start_time);
+                        let end_abs =
+                            llm::relative_to_absolute(session_start, session_end, &card.end_time);
                         (start_abs.to_rfc3339(), end_abs.to_rfc3339())
                     } else {
                         // 已经是ISO格式，直接使用
@@ -1004,7 +1024,7 @@ async fn regenerate_timeline(
                     storage::TimelineCardRecord {
                         id: None,
                         session_id,
-                        llm_call_id: timeline_call_id,  // 使用实际的LLM调用ID
+                        llm_call_id: timeline_call_id, // 使用实际的LLM调用ID
                         start_time,
                         end_time,
                         category: card.category.clone(),
@@ -1012,7 +1032,9 @@ async fn regenerate_timeline(
                         title: card.title.clone(),
                         summary: card.summary.clone(),
                         detailed_summary: card.detailed_summary.clone(),
-                        distractions: Some(serde_json::to_string(&card.distractions).unwrap_or_default()),
+                        distractions: Some(
+                            serde_json::to_string(&card.distractions).unwrap_or_default(),
+                        ),
                         app_sites: serde_json::to_string(&card.app_sites).unwrap_or_default(),
                         video_preview_path: None,
                         created_at: chrono::Utc::now(),
@@ -1038,7 +1060,6 @@ async fn open_storage_folder(
     state: tauri::State<'_, AppState>,
     folder_type: String,
 ) -> Result<(), String> {
-
     let path = match folder_type.as_str() {
         "frames" => state.capture.frames_dir(),
         "videos" => state.video_processor.output_dir.clone(),

@@ -181,7 +181,9 @@ impl LLMManager {
         segments: Vec<VideoSegment>,
         previous_cards: Option<Vec<TimelineCard>>,
     ) -> Result<Vec<TimelineCard>> {
-        self.provider.generate_timeline(segments, previous_cards).await
+        self.provider
+            .generate_timeline(segments, previous_cards)
+            .await
     }
 
     /// 获取最后一次LLM调用的ID
@@ -284,10 +286,14 @@ pub fn build_session_summary(
             }
 
             let category = match category_str.as_str() {
-                "work" | "coding" | "writing" | "design" | "planning" | "data_analysis" => ActivityCategory::Work,
+                "work" | "coding" | "writing" | "design" | "planning" | "data_analysis" => {
+                    ActivityCategory::Work
+                }
                 "communication" | "meeting" => ActivityCategory::Communication,
                 "learning" | "research" => ActivityCategory::Learning,
-                "personal" | "entertainment" | "social_media" | "shopping" | "finance" => ActivityCategory::Personal,
+                "personal" | "entertainment" | "social_media" | "shopping" | "finance" => {
+                    ActivityCategory::Personal
+                }
                 "idle" => ActivityCategory::Idle,
                 _ => ActivityCategory::Other,
             };
@@ -301,7 +307,7 @@ pub fn build_session_summary(
 
             tags.push(ActivityTag {
                 category,
-                confidence: *weight,  // 使用时间占比作为confidence
+                confidence: *weight, // 使用时间占比作为confidence
                 keywords,
             });
         }
@@ -337,7 +343,12 @@ pub fn build_session_summary(
         timeline_cards
             .first()
             .map(|c| c.detailed_summary.clone())
-            .unwrap_or_else(|| segments.first().map(|s| s.description.clone()).unwrap_or_default())
+            .unwrap_or_else(|| {
+                segments
+                    .first()
+                    .map(|s| s.description.clone())
+                    .unwrap_or_default()
+            })
     };
 
     SessionSummary {
@@ -382,10 +393,14 @@ fn parse_duration(start: &str, end: &str) -> Option<f32> {
 // 辅助函数：映射类别
 fn map_category(category_str: &str) -> ActivityCategory {
     match category_str.to_lowercase().as_str() {
-        "work" | "coding" | "writing" | "design" | "planning" | "data_analysis" => ActivityCategory::Work,
+        "work" | "coding" | "writing" | "design" | "planning" | "data_analysis" => {
+            ActivityCategory::Work
+        }
         "communication" | "meeting" => ActivityCategory::Communication,
         "learning" | "research" => ActivityCategory::Learning,
-        "personal" | "entertainment" | "social_media" | "shopping" | "finance" => ActivityCategory::Personal,
+        "personal" | "entertainment" | "social_media" | "shopping" | "finance" => {
+            ActivityCategory::Personal
+        }
         "idle" => ActivityCategory::Idle,
         _ => ActivityCategory::Other,
     }

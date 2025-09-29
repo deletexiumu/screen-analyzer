@@ -153,10 +153,16 @@ impl VideoProcessor {
             filters.push(format!("setpts=PTS/{}", config.speed_multiplier));
         }
 
-        // 添加时间戳水印
-        if config.add_timestamp {
+        // 添加时间戳水印 - 暂时禁用，避免字体问题导致FFmpeg卡住
+        if false && config.add_timestamp {
+            // macOS默认字体路径
+            #[cfg(target_os = "macos")]
+            let font_path = "/System/Library/Fonts/Helvetica.ttc";
+            #[cfg(not(target_os = "macos"))]
+            let font_path = "Arial";
+
             filters.push(
-                "drawtext=text='%{localtime}':x=10:y=10:fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5".to_string()
+                format!("drawtext=text='%{{localtime}}':x=10:y=10:fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5:fontfile={}", font_path)
             );
         }
 
@@ -182,9 +188,11 @@ impl VideoProcessor {
             .arg(output_path);
 
         debug!("FFmpeg命令: {:?}", command);
+        info!("开始执行FFmpeg命令，可能需要一些时间...");
 
         // 执行命令
         let output = command.output().await?;
+        info!("FFmpeg命令执行完成");
 
         // 清理临时文件
         tokio::fs::remove_file(frame_list_path).await.ok();

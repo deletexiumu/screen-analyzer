@@ -211,7 +211,7 @@ where
                 .into_iter()
                 .filter_map(|v| match v {
                     Value::String(s) => Some(s),
-                    _ => None
+                    _ => None,
                 })
                 .collect();
 
@@ -221,7 +221,7 @@ where
                 Ok(Some(strings))
             }
         }
-        _ => Ok(None)
+        _ => Ok(None),
     }
 }
 
