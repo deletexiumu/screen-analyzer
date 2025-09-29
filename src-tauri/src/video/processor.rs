@@ -2,6 +2,7 @@
 
 use super::{VideoResult, VideoTask, VideoTaskStatus};
 use anyhow::Result;
+use image::GenericImageView;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{debug, error, info};
@@ -124,6 +125,27 @@ impl VideoProcessor {
             return Err(anyhow::anyhow!("没有可用的帧"));
         }
 
+        // 检测所有图片的分辨率，取最大值
+        let mut max_width = 0u32;
+        let mut max_height = 0u32;
+
+        for frame_path in &frames {
+            if let Ok(img) = image::open(frame_path) {
+                let (width, height) = img.dimensions();
+                max_width = max_width.max(width);
+                max_height = max_height.max(height);
+            }
+        }
+
+        // 如果检测失败，使用配置的默认分辨率
+        let resolution = if max_width > 0 && max_height > 0 {
+            info!("检测到最大分辨率: {}x{}", max_width, max_height);
+            (max_width, max_height)
+        } else {
+            info!("使用默认分辨率: {}x{}", config.resolution.0, config.resolution.1);
+            config.resolution
+        };
+
         // 生成帧列表文件
         let frame_list_path = self.create_frame_list(&frames).await?;
 
@@ -142,10 +164,10 @@ impl VideoProcessor {
         // 视频滤镜
         let mut filters = vec![];
 
-        // 缩放
+        // 缩放到检测到的最大分辨率
         filters.push(format!(
             "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
-            config.resolution.0, config.resolution.1, config.resolution.0, config.resolution.1
+            resolution.0, resolution.1, resolution.0, resolution.1
         ));
 
         // 速度调整
@@ -216,7 +238,7 @@ impl VideoProcessor {
             file_path: output_path.to_string_lossy().to_string(),
             duration,
             file_size,
-            resolution: config.resolution,
+            resolution,
             fps: config.fps as f32,
             processing_time_ms,
         };
