@@ -40,6 +40,14 @@
     ],
     "resources": [
       "resources/**/*"
-    ]
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "exceptionDomain": null,
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null,
+      "minimumSystemVersion": "10.13"
+    }
   }
 }
