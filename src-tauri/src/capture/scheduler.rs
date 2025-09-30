@@ -238,7 +238,7 @@ impl CaptureScheduler {
             );
 
             match session_processor
-                .process_session(frames, window.clone())
+                .process_session(frames.clone(), window.clone())
                 .await
             {
                 Ok(_) => {
@@ -247,10 +247,31 @@ impl CaptureScheduler {
                     info!("会话处理完成: {} - {}", window.start, window.end);
                 }
                 Err(e) => {
-                    error!(
-                        "会话处理失败: {} - {}, 错误: {}",
-                        window.start, window.end, e
-                    );
+                    // 检查是否是视频过短错误
+                    if e.to_string().contains("VIDEO_TOO_SHORT") {
+                        error!(
+                            "会话处理失败（视频过短）: {} - {}, 开始清理...",
+                            window.start, window.end
+                        );
+
+                        // 清理：删除所有相关资源
+                        // 1. 删除原始图片文件
+                        for frame in &frames {
+                            if let Err(del_err) = tokio::fs::remove_file(&frame.file_path).await {
+                                error!("删除图片文件失败 {}: {}", frame.file_path, del_err);
+                            }
+                        }
+                        info!("已删除 {} 个原始图片文件", frames.len());
+
+                        // 标记此时间窗口已处理，避免重复尝试
+                        processed_windows.insert(bucket_start_ms);
+                        info!("视频过短错误处理完成，已清理所有资源");
+                    } else {
+                        error!(
+                            "会话处理失败: {} - {}, 错误: {}",
+                            window.start, window.end, e
+                        );
+                    }
                 }
             }
         }

@@ -230,6 +230,52 @@
         </div>
       </el-tab-pane>
 
+      <!-- 日志 -->
+      <el-tab-pane label="日志" name="logs">
+        <div class="logs-content">
+          <div class="logs-header">
+            <el-switch
+              v-model="settings.logger_settings.enable_frontend_logging"
+              active-text="启用实时日志"
+              inactive-text="禁用实时日志"
+            />
+            <div class="logs-actions">
+              <el-button
+                @click="clearLogs"
+                size="small"
+                :icon="Delete"
+              >
+                清空日志
+              </el-button>
+              <el-button
+                @click="openLogFolder"
+                size="small"
+                type="info"
+                :icon="Folder"
+              >
+                打开日志文件夹
+              </el-button>
+            </div>
+          </div>
+
+          <div class="logs-container" ref="logsContainer">
+            <div
+              v-for="(log, index) in logs"
+              :key="index"
+              :class="['log-entry', `log-${log.level.toLowerCase()}`]"
+            >
+              <span class="log-time">{{ log.timestamp }}</span>
+              <span class="log-level">{{ log.level }}</span>
+              <span class="log-target">{{ log.target }}</span>
+              <span class="log-message">{{ log.message }}</span>
+            </div>
+            <div v-if="logs.length === 0" class="no-logs">
+              暂无日志
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <!-- 关于 -->
       <el-tab-pane label="关于" name="about">
         <div class="about-content">
@@ -269,11 +315,12 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, watch, onMounted } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Delete, Refresh, VideoCamera, Folder, Document } from '@element-plus/icons-vue'
 import { useActivityStore } from '../stores/activity'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import TagManager from './TagManager.vue'
 
 const props = defineProps({
@@ -292,6 +339,12 @@ const cleaningUp = ref(false)
 const refreshing = ref(false)
 const testingAPI = ref(false)
 const testingVideo = ref(false)
+
+// 日志相关
+const logs = ref([])
+const logsContainer = ref(null)
+let unlistenLog = null
+const MAX_LOGS = 1000 // 最大日志条数
 
 const dialogVisible = computed({
   get: () => props.modelValue,
@@ -316,7 +369,12 @@ const settings = reactive({
     detect_black_screen: true,
     black_screen_threshold: 5
   },
-  ui_settings: null
+  ui_settings: null,
+  logger_settings: {
+    enable_frontend_logging: true,
+    log_level: 'info',
+    max_log_buffer: 1000
+  }
 })
 
 // LLM配置
@@ -366,12 +424,28 @@ const testLLMAPI = async () => {
   }
 }
 
+// 清空日志
+const clearLogs = () => {
+  logs.value = []
+  ElMessage.success('日志已清空')
+}
+
+// 滚动到日志底部
+const scrollToBottom = async () => {
+  await nextTick()
+  if (logsContainer.value) {
+    logsContainer.value.scrollTop = logsContainer.value.scrollHeight
+  }
+}
+
 // 保存设置
 const saveSettings = async () => {
   saving.value = true
   try {
     const videoConfigPayload = JSON.parse(JSON.stringify(settings.video_config))
     const captureSettingsPayload = JSON.parse(JSON.stringify(settings.capture_settings))
+    const loggerSettingsPayload = JSON.parse(JSON.stringify(settings.logger_settings))
+
     // 保存基础设置
     await store.updateConfig({
       retention_days: settings.retention_days,
@@ -380,7 +454,8 @@ const saveSettings = async () => {
       summary_interval: settings.summary_interval,
       video_config: videoConfigPayload,
       capture_settings: captureSettingsPayload,
-      ui_settings: settings.ui_settings
+      ui_settings: settings.ui_settings,
+      logger_settings: loggerSettingsPayload
     })
 
     // 配置LLM提供商
@@ -488,13 +563,16 @@ const handleClose = () => {
 
 // 初始化设置
 const initSettings = () => {
-  const { video_config, llm_config, capture_settings, ...rest } = store.appConfig
+  const { video_config, llm_config, capture_settings, logger_settings, ...rest } = store.appConfig
   Object.assign(settings, rest)
   if (video_config) {
     Object.assign(settings.video_config, video_config)
   }
   if (capture_settings) {
     Object.assign(settings.capture_settings, capture_settings)
+  }
+  if (logger_settings) {
+    Object.assign(settings.logger_settings, logger_settings)
   }
   // 加载LLM配置
   if (llm_config) {
@@ -512,9 +590,27 @@ watch(dialogVisible, (newVal) => {
   }
 })
 
-onMounted(() => {
-  // 不再需要获取提供商列表
-  // store.fetchLLMProviders()
+onMounted(async () => {
+  // 监听日志事件
+  unlistenLog = await listen('log-message', (event) => {
+    const logMessage = event.payload
+    logs.value.push(logMessage)
+
+    // 限制日志数量
+    if (logs.value.length > MAX_LOGS) {
+      logs.value.shift()
+    }
+
+    // 自动滚动到底部
+    scrollToBottom()
+  })
+})
+
+onUnmounted(() => {
+  // 取消监听
+  if (unlistenLog) {
+    unlistenLog()
+  }
 })
 </script>
 
@@ -568,5 +664,97 @@ onMounted(() => {
 
 :deep(.el-tabs__content) {
   min-height: 400px;
+}
+
+.logs-content {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  height: 500px;
+}
+
+.logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.logs-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.logs-container {
+  flex: 1;
+  overflow-y: auto;
+  background: #1e1e1e;
+  border-radius: 6px;
+  padding: 12px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.log-entry {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding: 4px 0;
+  border-bottom: 1px solid #2d2d2d;
+}
+
+.log-time {
+  color: #6c757d;
+  flex-shrink: 0;
+  width: 200px;
+}
+
+.log-level {
+  flex-shrink: 0;
+  width: 60px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.log-target {
+  color: #6c757d;
+  flex-shrink: 0;
+  width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-message {
+  flex: 1;
+  color: #f8f9fa;
+  word-break: break-word;
+}
+
+.log-trace .log-level {
+  color: #6c757d;
+}
+
+.log-debug .log-level {
+  color: #17a2b8;
+}
+
+.log-info .log-level {
+  color: #28a745;
+}
+
+.log-warn .log-level {
+  color: #ffc107;
+}
+
+.log-error .log-level {
+  color: #dc3545;
+}
+
+.no-logs {
+  text-align: center;
+  color: #6c757d;
+  padding: 40px;
+  font-size: 14px;
 }
 </style>

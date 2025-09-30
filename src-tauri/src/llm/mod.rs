@@ -212,6 +212,10 @@ impl LLMManager {
             }
             Err(e) => {
                 error!("视频分段失败: {}", e);
+                // 检查是否是视频过短错误，如果是则保留特殊标记
+                if e.to_string().contains("VIDEO_TOO_SHORT") {
+                    return Err(anyhow::anyhow!("VIDEO_TOO_SHORT: {}", e));
+                }
                 return Err(e);
             }
         };
@@ -586,6 +590,9 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         let session_id = self.db.insert_session(&temp_session).await?;
         info!("创建临时会话: ID={}", session_id);
 
+        // 记录视频路径，用于错误清理
+        let video_path_for_cleanup = video_path.clone();
+
         // 更新provider的视频路径
         {
             let mut manager = self.manager.lock().await;
@@ -606,9 +613,35 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         // 使用两阶段分析：先分段，再生成时间线
         let analysis = {
             let mut manager = self.manager.lock().await;
-            manager
+            match manager
                 .segment_video_and_generate_timeline(frame_paths, duration_minutes, None)
-                .await?
+                .await {
+                Ok(result) => result,
+                Err(e) => {
+                    // 如果是视频过短错误，清理已创建的资源
+                    if e.to_string().contains("VIDEO_TOO_SHORT") {
+                        error!("检测到视频过短错误，开始清理资源...");
+
+                        // 1. 删除数据库中的会话记录
+                        if let Err(del_err) = self.db.delete_session(session_id).await {
+                            error!("删除会话失败 (ID={}): {}", session_id, del_err);
+                        } else {
+                            info!("已删除会话记录: ID={}", session_id);
+                        }
+
+                        // 2. 删除视频文件（如果存在）
+                        if let Some(ref vp) = video_path_for_cleanup {
+                            if let Err(del_err) = tokio::fs::remove_file(vp).await {
+                                error!("删除视频文件失败 {}: {}", vp, del_err);
+                            } else {
+                                info!("已删除视频文件: {}", vp);
+                            }
+                        }
+                    }
+
+                    return Err(e);
+                }
+            }
         };
 
         let TimelineAnalysis {

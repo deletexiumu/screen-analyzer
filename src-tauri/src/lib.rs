@@ -3,6 +3,7 @@
 // 声明模块
 pub mod capture;
 pub mod llm;
+pub mod logger;
 pub mod models;
 pub mod settings;
 pub mod storage;
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 // 导入必要的类型
 use capture::{scheduler::CaptureScheduler, ScreenCapture};
@@ -43,6 +44,8 @@ pub struct AppState {
     pub settings: Arc<SettingsManager>,
     /// 视频分析锁
     pub analysis_lock: Arc<tokio::sync::Mutex<()>>,
+    /// 日志广播器
+    pub log_broadcaster: Arc<logger::LogBroadcaster>,
 }
 
 // ==================== Tauri命令 ====================
@@ -137,6 +140,12 @@ async fn update_config(
     if let Some(capture_settings) = config.capture_settings {
         state.capture.update_settings(capture_settings.clone()).await;
         info!("截屏配置已更新: {:?}", capture_settings);
+    }
+
+    // 更新日志配置
+    if let Some(logger_settings) = config.logger_settings {
+        state.log_broadcaster.set_enabled(logger_settings.enable_frontend_logging);
+        info!("日志配置已更新: 前端日志推送 = {}", logger_settings.enable_frontend_logging);
     }
 
     Ok(updated_config)
@@ -655,6 +664,7 @@ async fn test_generate_videos(
     video_config.add_timestamp = settings.add_timestamp;
 
     let mut generated_videos = Vec::new();
+    let mut failed_segments = Vec::new();
 
     for (segment_start, frame_paths) in segments.into_iter() {
         if frame_paths.is_empty() {
@@ -667,12 +677,14 @@ async fn test_generate_videos(
             video_config.format.extension()
         );
 
-        let output_path = state.video_processor.output_dir.join(output_name);
+        let output_path = state.video_processor.output_dir.join(&output_name);
 
         let frame_list: Vec<String> = frame_paths
             .iter()
             .map(|path| path.to_string_lossy().to_string())
             .collect();
+
+        info!("生成视频段: {} ({} 帧)", output_name, frame_list.len());
 
         match state
             .video_processor
@@ -680,18 +692,51 @@ async fn test_generate_videos(
             .await
         {
             Ok(result) => {
+                info!("视频生成成功: {}", result.file_path);
+
+                // 删除已使用的帧
+                let mut deleted_count = 0;
+                let mut failed_count = 0;
+
                 for frame_path in frame_paths {
-                    if let Err(err) = tokio::fs::remove_file(&frame_path).await {
-                        error!("删除帧失败: {} - {}", frame_path.display(), err);
+                    match tokio::fs::remove_file(&frame_path).await {
+                        Ok(_) => deleted_count += 1,
+                        Err(err) => {
+                            failed_count += 1;
+                            error!("删除帧失败: {} - {}", frame_path.display(), err);
+                        }
                     }
                 }
+
+                info!("删除帧: 成功 {}, 失败 {}", deleted_count, failed_count);
                 generated_videos.push(result.file_path);
             }
             Err(err) => {
-                error!("测试生成视频失败: {}", err);
-                return Err(err.to_string());
+                // ⚠️ 不再直接返回错误，记录后继续处理其他视频段
+                error!("视频段 {} 生成失败: {}", output_name, err);
+                failed_segments.push((output_name, err.to_string()));
             }
         }
+    }
+
+    // 如果所有视频段都失败，返回错误
+    if generated_videos.is_empty() && !failed_segments.is_empty() {
+        let error_summary = failed_segments
+            .iter()
+            .map(|(name, err)| format!("{}: {}", name, err))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!("所有视频段生成失败: {}", error_summary));
+    }
+
+    // 如果有部分成功，记录失败的段但返回成功
+    if !failed_segments.is_empty() {
+        warn!(
+            "部分视频段生成失败 ({}/{}): {:?}",
+            failed_segments.len(),
+            failed_segments.len() + generated_videos.len(),
+            failed_segments.iter().map(|(name, _)| name).collect::<Vec<_>>()
+        );
     }
 
     Ok(generated_videos)
@@ -788,6 +833,7 @@ async fn configure_llm_provider(
         capture_settings: None,
         ui_settings: None,
         llm_config: Some(llm_provider_config),
+        logger_settings: None,
     };
 
     state
@@ -1473,54 +1519,19 @@ async fn process_historical_frames(state: &AppState) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 初始化日志 - 同时输出到控制台和文件
-    let log_dir = if cfg!(target_os = "macos") {
-        // macOS: ~/Library/Logs/screen-analyzer
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join("Library/Logs/screen-analyzer")
-    } else if cfg!(target_os = "windows") {
-        // Windows: %APPDATA%\screen-analyzer\logs
-        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(appdata).join("screen-analyzer").join("logs")
-    } else {
-        // Linux: ~/.local/share/screen-analyzer/logs
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join(".local/share/screen-analyzer/logs")
-    };
+    // 创建日志广播器
+    let log_broadcaster = Arc::new(logger::LogBroadcaster::new());
 
-    // 创建日志目录
-    std::fs::create_dir_all(&log_dir).ok();
-
-    // 配置日志输出到文件（每天轮转）
-    let file_appender = tracing_appender::rolling::daily(log_dir.clone(), "app.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    // 保持 guard 在整个程序生命周期
-    std::mem::forget(_guard);
-
-    // 使用 MultiWriter 同时输出到控制台和文件
-    use tracing_subscriber::fmt::writer::MakeWriterExt;
-    use tracing_subscriber::fmt::time::LocalTime;
-    let writer = std::io::stdout.and(non_blocking);
-
-    // 使用本地时区
-    let timer = LocalTime::new(time::format_description::parse(
-        "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
-    ).unwrap());
-
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_writer(writer)
-        .with_timer(timer)
-        .with_ansi(cfg!(debug_assertions)) // release 版本不使用颜色代码
-        .init();
-
-    eprintln!("日志文件位置: {:?}", log_dir);
+    // 初始化日志系统（带前端推送功能）
+    logger::init_with_broadcaster(log_broadcaster.clone())
+        .expect("Failed to initialize logger");
 
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             info!("初始化屏幕活动分析器...");
+
+            // 设置日志广播器的 app handle
+            log_broadcaster.set_app_handle(app.handle().clone());
 
             let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
@@ -1616,6 +1627,11 @@ pub fn run() {
 
                 let analysis_lock = Arc::new(tokio::sync::Mutex::new(()));
 
+                // 从配置中读取日志设置并应用
+                let initial_logger_settings = initial_config.logger_settings.unwrap_or_default();
+                log_broadcaster.set_enabled(initial_logger_settings.enable_frontend_logging);
+                info!("日志推送已设置: {}", initial_logger_settings.enable_frontend_logging);
+
                 AppState {
                     capture,
                     db,
@@ -1626,6 +1642,7 @@ pub fn run() {
                     scheduler,
                     settings,
                     analysis_lock,
+                    log_broadcaster: log_broadcaster.clone(),
                 }
             });
 

@@ -26,6 +26,29 @@ pub struct AppConfig {
     pub llm_config: Option<LLMProviderConfig>,
     /// 截屏配置
     pub capture_settings: Option<CaptureSettings>,
+    /// 日志配置
+    pub logger_settings: Option<LoggerSettings>,
+}
+
+/// 日志设置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggerSettings {
+    /// 是否启用日志推送到前端
+    pub enable_frontend_logging: bool,
+    /// 日志级别 (trace, debug, info, warn, error)
+    pub log_level: String,
+    /// 最大日志缓存条数
+    pub max_log_buffer: usize,
+}
+
+impl Default for LoggerSettings {
+    fn default() -> Self {
+        Self {
+            enable_frontend_logging: true,
+            log_level: "info".to_string(),
+            max_log_buffer: 1000,
+        }
+    }
 }
 
 /// 截屏设置
@@ -129,6 +152,8 @@ pub struct PersistedAppConfig {
     pub llm_config: Option<LLMProviderConfig>,
     /// 截屏配置
     pub capture_settings: Option<CaptureSettings>,
+    /// 日志配置
+    pub logger_settings: Option<LoggerSettings>,
 }
 
 impl Default for PersistedAppConfig {
@@ -142,6 +167,7 @@ impl Default for PersistedAppConfig {
             ui_settings: Some(UISettings::default()),
             llm_config: None,
             capture_settings: Some(CaptureSettings::default()),
+            logger_settings: Some(LoggerSettings::default()),
         }
     }
 }

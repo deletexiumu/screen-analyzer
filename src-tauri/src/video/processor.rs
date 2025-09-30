@@ -254,14 +254,29 @@ impl VideoProcessor {
     /// 创建帧列表文件
     async fn create_frame_list(&self, frames: &[String]) -> Result<PathBuf> {
         // 检查文件是否存在
+        info!("检查 {} 个帧文件路径...", frames.len());
+
         let valid_frames: Vec<&String> = frames
             .iter()
-            .filter(|path| std::path::Path::new(path).exists())
+            .filter(|path| {
+                let exists = std::path::Path::new(path).exists();
+                if !exists && frames.len() <= 3 {
+                    // 如果文件少，打印每个路径用于调试
+                    debug!("文件不存在: {}", path);
+                }
+                exists
+            })
             .collect();
 
         if valid_frames.is_empty() {
+            // 打印第一个无效路径帮助调试
+            if let Some(first_path) = frames.first() {
+                error!("所有帧文件都不存在，第一个路径示例: {}", first_path);
+            }
             return Err(anyhow::anyhow!("没有有效的帧文件"));
         }
+
+        info!("找到 {} 个有效帧文件", valid_frames.len());
 
         let list_path = self
             .temp_dir

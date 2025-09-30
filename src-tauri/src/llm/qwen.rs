@@ -711,6 +711,12 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
                 }
             }
 
+            // 检测是否是视频过短错误
+            if error_text.contains("video file is too short")
+                || error_text.contains("The video file is too short") {
+                return Err(anyhow::anyhow!("VIDEO_TOO_SHORT: {}", error_text));
+            }
+
             return Err(anyhow::anyhow!("Qwen API调用失败: {}", error_text));
         }
 
