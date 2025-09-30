@@ -219,6 +219,13 @@
               <el-icon><VideoCamera /></el-icon>
               打开视频文件夹
             </el-button>
+            <el-button
+              @click="openLogFolder"
+              type="info"
+            >
+              <el-icon><Document /></el-icon>
+              打开日志文件夹
+            </el-button>
           </div>
         </div>
       </el-tab-pane>
@@ -263,7 +270,7 @@
 
 <script setup>
 import { ref, computed, reactive, watch, onMounted } from 'vue'
-import { Delete, Refresh, VideoCamera, Folder } from '@element-plus/icons-vue'
+import { Delete, Refresh, VideoCamera, Folder, Document } from '@element-plus/icons-vue'
 import { useActivityStore } from '../stores/activity'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
@@ -461,6 +468,16 @@ const openStorageFolder = async (folderType) => {
     await invoke('open_storage_folder', { folderType })
   } catch (error) {
     ElMessage.error('打开文件夹失败: ' + error)
+  }
+}
+
+// 打开日志文件夹
+const openLogFolder = async () => {
+  try {
+    await invoke('open_log_folder')
+    ElMessage.success('已打开日志文件夹')
+  } catch (error) {
+    ElMessage.error('打开日志文件夹失败: ' + error)
   }
 }
 

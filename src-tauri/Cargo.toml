@@ -34,9 +34,11 @@ async-trait = "0.1"
 base64 = "0.22"
 anyhow = "1.0"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["local-time"] }
 cron = "0.12"  # 定时任务
 uuid = { version = "1.0", features = ["v4"] }  # 生成唯一ID
+tracing-appender = "0.2.3"
+time = { version = "0.3.44", features = ["formatting", "local-offset", "macros"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"

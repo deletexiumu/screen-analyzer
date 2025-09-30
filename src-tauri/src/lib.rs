@@ -1106,6 +1106,73 @@ async fn open_storage_folder(
     Ok(())
 }
 
+/// 获取日志目录路径
+#[tauri::command]
+fn get_log_dir() -> Result<String, String> {
+    let log_dir = if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join("Library/Logs/screen-analyzer")
+    } else if cfg!(target_os = "windows") {
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(appdata).join("screen-analyzer").join("logs")
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join(".local/share/screen-analyzer/logs")
+    };
+
+    Ok(log_dir.to_string_lossy().to_string())
+}
+
+/// 打开日志文件夹
+#[tauri::command]
+fn open_log_folder() -> Result<(), String> {
+    let log_dir = if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join("Library/Logs/screen-analyzer")
+    } else if cfg!(target_os = "windows") {
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(appdata).join("screen-analyzer").join("logs")
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join(".local/share/screen-analyzer/logs")
+    };
+
+    // 确保目录存在
+    if !log_dir.exists() {
+        std::fs::create_dir_all(&log_dir).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+
+    // 根据操作系统打开文件夹
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("无法打开日志文件夹: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("无法打开日志文件夹: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&log_dir)
+            .spawn()
+            .map_err(|e| format!("无法打开日志文件夹: {}", e))?;
+    }
+
+    info!("已打开日志文件夹: {:?}", log_dir);
+    Ok(())
+}
+
 /// 测试LLM API连接
 #[tauri::command]
 async fn test_llm_api(
@@ -1406,10 +1473,50 @@ async fn process_historical_frames(state: &AppState) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 初始化日志
+    // 初始化日志 - 同时输出到控制台和文件
+    let log_dir = if cfg!(target_os = "macos") {
+        // macOS: ~/Library/Logs/screen-analyzer
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join("Library/Logs/screen-analyzer")
+    } else if cfg!(target_os = "windows") {
+        // Windows: %APPDATA%\screen-analyzer\logs
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(appdata).join("screen-analyzer").join("logs")
+    } else {
+        // Linux: ~/.local/share/screen-analyzer/logs
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join(".local/share/screen-analyzer/logs")
+    };
+
+    // 创建日志目录
+    std::fs::create_dir_all(&log_dir).ok();
+
+    // 配置日志输出到文件（每天轮转）
+    let file_appender = tracing_appender::rolling::daily(log_dir.clone(), "app.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // 保持 guard 在整个程序生命周期
+    std::mem::forget(_guard);
+
+    // 使用 MultiWriter 同时输出到控制台和文件
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    use tracing_subscriber::fmt::time::LocalTime;
+    let writer = std::io::stdout.and(non_blocking);
+
+    // 使用本地时区
+    let timer = LocalTime::new(time::format_description::parse(
+        "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
+    ).unwrap());
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
+        .with_writer(writer)
+        .with_timer(timer)
+        .with_ansi(cfg!(debug_assertions)) // release 版本不使用颜色代码
         .init();
+
+    eprintln!("日志文件位置: {:?}", log_dir);
 
     tauri::Builder::default()
         .setup(|app| {
@@ -1631,6 +1738,8 @@ pub fn run() {
             regenerate_timeline,
             delete_session,
             open_storage_folder,
+            get_log_dir,
+            open_log_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

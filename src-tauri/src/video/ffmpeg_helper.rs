@@ -6,7 +6,43 @@ use tracing::{debug, info, warn};
 
 /// 获取FFmpeg可执行文件的路径
 pub fn get_ffmpeg_path() -> Result<PathBuf> {
-    // 首先尝试使用内置的FFmpeg
+    // macOS 常见的 ffmpeg 安装路径
+    let common_paths = vec![
+        "/opt/homebrew/bin/ffmpeg",      // Apple Silicon Homebrew
+        "/usr/local/bin/ffmpeg",         // Intel Homebrew
+        "/opt/local/bin/ffmpeg",         // MacPorts
+        "/usr/bin/ffmpeg",               // 系统自带（少见）
+    ];
+
+    // 先尝试常见路径
+    for path_str in &common_paths {
+        let path = PathBuf::from(path_str);
+        if path.exists() {
+            // 验证可执行
+            if let Ok(output) = std::process::Command::new(&path)
+                .arg("-version")
+                .output()
+            {
+                if output.status.success() {
+                    info!("使用系统FFmpeg: {:?}", path);
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    // 尝试 PATH 环境变量中的 ffmpeg
+    if let Ok(output) = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+    {
+        if output.status.success() {
+            info!("使用PATH中的FFmpeg");
+            return Ok(PathBuf::from("ffmpeg"));
+        }
+    }
+
+    // 最后尝试内置的FFmpeg（仅作为备用）
     if let Ok(bundled_path) = get_bundled_ffmpeg_path() {
         if bundled_path.exists() {
             info!("使用内置FFmpeg: {:?}", bundled_path);
@@ -14,19 +50,8 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
         }
     }
 
-    // 如果没有内置的，尝试系统PATH中的FFmpeg
-    if let Ok(output) = std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-    {
-        if output.status.success() {
-            info!("使用系统FFmpeg");
-            return Ok(PathBuf::from("ffmpeg"));
-        }
-    }
-
-    // 都没找到
-    Err(anyhow!("未找到FFmpeg。请确保FFmpeg已安装或使用内置版本。"))
+    // 都没找到，返回友好的错误提示
+    Err(anyhow!("未找到FFmpeg。请通过 Homebrew 安装: brew install ffmpeg"))
 }
 
 /// 获取内置FFmpeg的路径
