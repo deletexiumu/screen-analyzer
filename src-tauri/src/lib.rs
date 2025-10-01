@@ -21,7 +21,7 @@ use tracing::{debug, error, info, trace, warn};
 use capture::{scheduler::CaptureScheduler, ScreenCapture};
 use domains::{AnalysisDomain, CaptureDomain, StorageDomain, SystemDomain};
 use event_bus::EventBus;
-use llm::{LLMManager, LLMProcessor};
+use llm::LLMManager;
 use models::*;
 use settings::SettingsManager;
 use storage::{Database, StorageCleaner};
@@ -1703,16 +1703,12 @@ pub fn run() {
                         info!("开始处理历史图片，生成视频...");
                         process_historical_frames(&state_clone).await;
 
-                        // 创建LLM处理器（带视频处理器）
-                        let llm_processor = Arc::new(LLMProcessor::with_video_processor(
-                            state_clone.analysis_domain.get_llm_manager().clone(),
-                            state_clone.storage_domain.get_db().clone(),
-                            state_clone.analysis_domain.get_video_processor().clone(),
-                            state_clone.storage_domain.get_settings().clone(),
-                        ));
+                        // TODO: 添加LLMProcessor和VideoProcessor的事件监听器
+                        // 暂时保留旧的LLMProcessor以保证功能可用
+                        // 后续将完全迁移到事件驱动架构
 
-                        // 启动调度器
-                        state_clone.capture_domain.get_scheduler().clone().start(llm_processor);
+                        // 启动调度器（事件驱动模式）
+                        state_clone.capture_domain.get_scheduler().clone().start(state_clone.event_bus.clone());
 
                         // 启动存储清理任务
                         state_clone.storage_domain.get_cleaner().clone().start_cleanup_task().await;

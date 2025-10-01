@@ -1,6 +1,10 @@
 // 截屏调度器 - 负责定时截屏任务的调度
+//
+// 使用事件驱动架构,通过EventBus发布SessionCompleted事件
+// 解耦调度器与业务逻辑处理
 
 use super::ScreenCapture;
+use crate::event_bus::{AppEvent, EventBus};
 use anyhow::{anyhow, Result};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -138,10 +142,10 @@ impl CaptureScheduler {
         });
     }
 
-    /// 启动会话处理任务
+    /// 启动会话处理任务(事件驱动版本)
     pub fn start_session_task(
         self: Arc<Self>,
-        session_processor: Arc<dyn SessionProcessor + Send + Sync>,
+        event_bus: Arc<EventBus>,
     ) {
         let capture = self.capture.clone();
         let session_mins = self.session_duration;
@@ -151,12 +155,12 @@ impl CaptureScheduler {
             let mut processed_windows = WindowTracker::new(1000);
             let check_interval = Duration::from_secs(60);
 
-            info!("会话处理任务已启动，每60秒扫描待处理图片");
+            info!("会话处理任务已启动，每60秒扫描待处理图片（事件驱动模式）");
 
             loop {
                 if let Err(e) = CaptureScheduler::scan_pending_sessions(
                     capture.clone(),
-                    session_processor.clone(),
+                    event_bus.clone(),
                     session_mins,
                     &mut processed_windows,
                 )
@@ -170,22 +174,22 @@ impl CaptureScheduler {
         });
     }
 
-    /// 启动所有任务
-    pub fn start(self: Arc<Self>, session_processor: Arc<dyn SessionProcessor + Send + Sync>) {
-        info!("启动截屏调度器...");
+    /// 启动所有任务(事件驱动版本)
+    pub fn start(self: Arc<Self>, event_bus: Arc<EventBus>) {
+        info!("启动截屏调度器（事件驱动模式）...");
 
         // 启动截屏任务
         self.clone().start_capture_task();
 
         // 启动会话处理任务
-        self.start_session_task(session_processor);
+        self.start_session_task(event_bus);
 
         info!("所有调度任务已启动");
     }
 
     async fn scan_pending_sessions(
         capture: Arc<ScreenCapture>,
-        session_processor: Arc<dyn SessionProcessor + Send + Sync>,
+        event_bus: Arc<EventBus>,
         session_duration: u64,
         processed_windows: &mut WindowTracker,
     ) -> Result<()> {
@@ -282,43 +286,22 @@ impl CaptureScheduler {
                 window.start, window.end, frame_count
             );
 
-            match session_processor
-                .process_session(frames.clone(), window.clone())
-                .await
-            {
-                Ok(_) => {
-                    processed_windows.insert(bucket_start_ms);
-                    capture.prune_session_before(window.end).await;
-                    info!("会话处理完成: {} - {}", window.start, window.end);
-                }
-                Err(e) => {
-                    // 检查是否是视频过短错误
-                    if e.to_string().contains("VIDEO_TOO_SHORT") {
-                        error!(
-                            "会话处理失败（视频过短）: {} - {}, 开始清理...",
-                            window.start, window.end
-                        );
+            // 发布SessionCompleted事件（事件驱动架构）
+            // 不再直接调用processor，而是发布事件让订阅者处理
+            event_bus.publish(AppEvent::SessionCompleted {
+                session_id: bucket_start_ms, // 使用bucket_start_ms作为临时session_id
+                frame_count,
+            });
 
-                        // 清理：删除所有相关资源
-                        // 1. 删除原始图片文件
-                        for frame in &frames {
-                            if let Err(del_err) = tokio::fs::remove_file(&frame.file_path).await {
-                                error!("删除图片文件失败 {}: {}", frame.file_path, del_err);
-                            }
-                        }
-                        info!("已删除 {} 个原始图片文件", frames.len());
+            // 标记为已处理
+            processed_windows.insert(bucket_start_ms);
 
-                        // 标记此时间窗口已处理，避免重复尝试
-                        processed_windows.insert(bucket_start_ms);
-                        info!("视频过短错误处理完成，已清理所有资源");
-                    } else {
-                        error!(
-                            "会话处理失败: {} - {}, 错误: {}",
-                            window.start, window.end, e
-                        );
-                    }
-                }
-            }
+            info!(
+                "会话事件已发布: {} - {} (session_id: {})",
+                window.start, window.end, bucket_start_ms
+            );
+
+            // 注意：不再在这里清理图片，由事件订阅者（LLMProcessor）处理后决定是否清理
         }
 
         Ok(())
