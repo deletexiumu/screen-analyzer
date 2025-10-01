@@ -25,6 +25,7 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
             // Windows下隐藏控制台窗口
             #[cfg(target_os = "windows")]
             {
+                #[allow(unused_imports)]
                 use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
                 command.creation_flags(CREATE_NO_WINDOW);
@@ -177,6 +178,7 @@ pub async fn check_ffmpeg_available() -> bool {
             // Windows下隐藏控制台窗口
             #[cfg(target_os = "windows")]
             {
+                #[allow(unused_imports)]
                 use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
                 command.creation_flags(CREATE_NO_WINDOW);

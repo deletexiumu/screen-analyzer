@@ -178,6 +178,7 @@ impl VideoProcessor {
         // Windows下隐藏控制台窗口
         #[cfg(target_os = "windows")]
         {
+            #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             command.creation_flags(CREATE_NO_WINDOW);
@@ -340,9 +341,8 @@ impl VideoProcessor {
         output_path: &Path,
         target_duration_seconds: f32,
     ) -> Result<VideoResult> {
-        // 计算需要的速度倍数
+        // 计算需要的速度倍数（原始1fps）
         let total_frames = frames.len() as f32;
-        let base_fps = 1.0; // 原始1fps
         let target_fps = 30.0;
         let speed_multiplier = total_frames / (target_duration_seconds * target_fps);
 
