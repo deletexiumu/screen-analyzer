@@ -10,7 +10,6 @@ use reqwest::{multipart, Client};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
@@ -140,7 +139,7 @@ impl QwenProvider {
             .ok_or_else(|| anyhow::anyhow!("无效的文件路径"))?;
 
         let key = format!("{}/{}", policy.upload_dir, file_name);
-        let file_content = fs::read(file_path)?;
+        let file_content = tokio::fs::read(file_path).await?;
 
         // 构建multipart form
         let form = multipart::Form::new()
@@ -190,8 +189,8 @@ impl QwenProvider {
     }
 
     /// 将图片文件转换为base64
-    fn image_to_base64(&self, path: &str) -> Result<String> {
-        let image_data = fs::read(path)?;
+    async fn image_to_base64(&self, path: &str) -> Result<String> {
+        let image_data = tokio::fs::read(path).await?;
         Ok(general_purpose::STANDARD.encode(&image_data))
     }
 
@@ -924,7 +923,7 @@ impl LLMProvider for QwenProvider {
         // 转换为base64
         let mut images_base64 = Vec::new();
         for frame_path in sampled_frames {
-            match self.image_to_base64(&frame_path) {
+            match self.image_to_base64(&frame_path).await {
                 Ok(base64) => images_base64.push(base64),
                 Err(e) => error!("图片转换失败 {}: {}", frame_path, e),
             }
@@ -1048,7 +1047,7 @@ impl LLMProvider for QwenProvider {
         // 转换为base64
         let mut images_base64 = Vec::new();
         for frame_path in sampled_frames {
-            match self.image_to_base64(&frame_path) {
+            match self.image_to_base64(&frame_path).await {
                 Ok(base64) => images_base64.push(base64),
                 Err(e) => error!("图片转换失败 {}: {}", frame_path, e),
             }

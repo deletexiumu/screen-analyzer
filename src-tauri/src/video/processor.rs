@@ -80,6 +80,27 @@ impl VideoFormat {
     }
 }
 
+/// 帧过滤函数：每N秒选择一张图片
+///
+/// # 参数
+/// - `frames`: 原始帧列表（假设为1fps采样，即每秒1帧）
+/// - `interval_seconds`: 间隔秒数（例如5表示每5秒选择一张）
+///
+/// # 返回
+/// 过滤后的帧列表
+pub fn filter_frames_by_interval(frames: Vec<String>, interval_seconds: usize) -> Vec<String> {
+    if interval_seconds <= 1 {
+        return frames; // 不需要过滤
+    }
+
+    frames
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| idx % interval_seconds == 0)
+        .map(|(_, frame)| frame)
+        .collect()
+}
+
 impl VideoProcessor {
     /// 创建新的视频处理器
     pub fn new(output_dir: PathBuf, temp_dir: PathBuf) -> Result<Self> {
@@ -154,6 +175,14 @@ impl VideoProcessor {
         // 构建FFmpeg命令
         let mut command = tokio::process::Command::new(&self.ffmpeg_path);
 
+        // Windows下隐藏控制台窗口
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
         // 基础参数
         command
             .arg("-f")
@@ -216,8 +245,15 @@ impl VideoProcessor {
         debug!("FFmpeg命令: {:?}", command);
         info!("开始执行FFmpeg命令，可能需要一些时间...");
 
-        // 执行命令
-        let output = command.output().await?;
+        // 执行命令，设置10分钟超时
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(600),
+            command.output()
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("FFmpeg 执行超时(10分钟)"))?
+        .map_err(|e| anyhow::anyhow!("FFmpeg 执行失败: {}", e))?;
+
         info!("FFmpeg命令执行完成");
 
         // 清理临时文件

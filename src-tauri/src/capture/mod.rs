@@ -2,14 +2,16 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use image::{imageops, DynamicImage, ImageFormat};
+use image::{imageops, DynamicImage};
 use screenshots::{display_info::DisplayInfo, Screen};
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 use crate::models::CaptureSettings;
+
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 #[cfg(not(target_os = "macos"))]
 use tracing::debug;
@@ -172,8 +174,8 @@ impl ScreenCapture {
         // 获取图像尺寸
         let (width, height) = (img.width(), img.height());
 
-        // 采样检测：每隔10个像素采样一次，提高性能
-        let sample_step = 10;
+        // 采样检测：使用更大的步长提高性能，对于高分辨率图像足以准确检测
+        let sample_step = 100;
         let mut total_brightness = 0u64;
         let mut sample_count = 0u64;
 
@@ -255,7 +257,22 @@ impl ScreenCapture {
         let file_path = self.output_dir.join(&file_name);
 
         // 保存为JPEG格式，使用配置的质量
-        resized.save_with_format(&file_path, ImageFormat::Jpeg)?;
+        // 使用 JpegEncoder 来指定质量参数
+        use std::fs::File;
+        use std::io::BufWriter;
+        use image::codecs::jpeg::JpegEncoder;
+
+        let output_file = File::create(&file_path)
+            .map_err(|e| anyhow::anyhow!("创建文件失败: {}", e))?;
+        let writer = BufWriter::new(output_file);
+        let mut encoder = JpegEncoder::new_with_quality(writer, settings.image_quality);
+
+        encoder.encode(
+            resized.as_bytes(),
+            resized.width(),
+            resized.height(),
+            resized.color(),
+        )?;
 
         let frame = ScreenFrame {
             timestamp,

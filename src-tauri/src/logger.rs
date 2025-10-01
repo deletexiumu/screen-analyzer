@@ -1,11 +1,14 @@
 // 自定义日志层 - 支持将日志实时推送到前端
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use tauri::{AppHandle, Emitter};
 use tracing::subscriber::SetGlobalDefaultError;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::Layer;
+
+// 全局静态变量保存日志文件 guard，避免资源泄漏
+static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 /// 日志消息
 #[derive(Clone, Debug, serde::Serialize)]
@@ -147,10 +150,11 @@ pub fn init_with_broadcaster(
 
     // 配置日志输出到文件（每天轮转）
     let file_appender = tracing_appender::rolling::daily(log_dir.clone(), "app.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    // 保持 guard 在整个程序生命周期
-    std::mem::forget(_guard);
+    // 将 guard 存储在全局变量中，保持整个程序生命周期
+    // 这样可以在程序退出时正确释放资源
+    LOG_GUARD.set(guard).ok();
 
     // 使用 MultiWriter 同时输出到控制台和文件
     let writer = std::io::stdout.and(non_blocking);

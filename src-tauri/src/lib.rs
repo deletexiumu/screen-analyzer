@@ -23,6 +23,10 @@ use settings::SettingsManager;
 use storage::{Database, StorageCleaner};
 use video::VideoProcessor;
 
+// 视频帧采样相关常量
+/// 帧采样时间间隔（秒）
+const FRAME_SAMPLE_INTERVAL_SECONDS: u32 = 5;
+
 /// 应用状态
 #[derive(Clone)]
 pub struct AppState {
@@ -168,6 +172,39 @@ async fn add_manual_tag(
     // 添加新标签
     let mut tags = session_detail.tags;
     tags.push(tag);
+
+    // 更新数据库
+    let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
+
+    state
+        .db
+        .update_session_tags(session_id, &tags_json)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 删除标签
+#[tauri::command]
+async fn remove_tag(
+    state: tauri::State<'_, AppState>,
+    session_id: i64,
+    tag_index: usize,
+) -> Result<(), String> {
+    // 获取当前会话
+    let session_detail = state
+        .db
+        .get_session_detail(session_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 删除指定索引的标签
+    let mut tags = session_detail.tags;
+    if tag_index >= tags.len() {
+        return Err("标签索引超出范围".to_string());
+    }
+    tags.remove(tag_index);
 
     // 更新数据库
     let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
@@ -334,6 +371,35 @@ fn parse_video_window_from_stem(
 ) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
     use chrono::{NaiveDateTime, TimeZone, Utc};
 
+    // 处理 segment_YYYYMMDDHHMMSS_YYYYMMDDHHMMSS 格式
+    if stem.starts_with("segment_") {
+        let parts: Vec<&str> = stem
+            .strip_prefix("segment_")?
+            .split('_')
+            .filter(|p| !p.is_empty())
+            .collect();
+
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let start = parts[0];
+        let end = parts[1];
+
+        if start.len() != 12 || end.len() != 12 {
+            return None;
+        }
+
+        let start_naive = NaiveDateTime::parse_from_str(start, "%Y%m%d%H%M").ok()?;
+        let end_naive = NaiveDateTime::parse_from_str(end, "%Y%m%d%H%M").ok()?;
+
+        return Some((
+            Utc.from_utc_datetime(&start_naive),
+            Utc.from_utc_datetime(&end_naive),
+        ));
+    }
+
+    // 处理带连字符的旧格式 YYYYMMDDHHMMSS-YYYYMMDDHHMMSS
     let cleaned: String = stem
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == '-')
@@ -434,103 +500,21 @@ async fn generate_video(
         return Err("该会话没有截图帧，已删除该会话".to_string());
     }
 
-    // 实现智能抽帧：基于时间戳每5秒取一帧，并确保关键时间点（00,15,30,45秒）的帧被包含
-    let frame_paths: Vec<String> = if all_frames.len() <= 12 {
-        // 如果帧数少于12帧（1分钟内），使用全部帧
-        all_frames.iter().map(|f| f.file_path.clone()).collect()
-    } else {
-        use chrono::Timelike;
-        use std::collections::HashSet;
+    // 提取所有帧路径
+    let all_frame_paths: Vec<String> = all_frames.iter().map(|f| f.file_path.clone()).collect();
 
-        let mut selected_indices = HashSet::new();
-        let mut sampled = Vec::new();
+    // 应用帧过滤：每5秒选择一张图片（假设原始截图是1fps）
+    let frame_paths = video::filter_frames_by_interval(
+        all_frame_paths,
+        FRAME_SAMPLE_INTERVAL_SECONDS as usize
+    );
 
-        // 1. 添加第一帧和最后一帧
-        selected_indices.insert(0);
-        selected_indices.insert(all_frames.len() - 1);
-
-        // 2. 找到每个关键时间点（00,15,30,45秒）最近的帧
-        let key_seconds = vec![0, 15, 30, 45];
-
-        // 按分钟分组，找每分钟内关键时间点最近的帧
-        let mut minute_groups = std::collections::HashMap::new();
-        for (i, frame) in all_frames.iter().enumerate() {
-            let minute = frame.timestamp.minute();
-            minute_groups
-                .entry(minute)
-                .or_insert(Vec::new())
-                .push((i, frame));
-        }
-
-        // 对每个分钟组，找到距离关键时间点最近的帧
-        for (_minute, frames) in minute_groups.iter() {
-            for &key_sec in &key_seconds {
-                if let Some((idx, _frame)) = frames.iter().min_by_key(|(_, f)| {
-                    let sec = f.timestamp.second() as i32;
-                    // 计算距离关键时间点的最小距离
-                    (sec - key_sec as i32).abs()
-                }) {
-                    selected_indices.insert(*idx);
-                }
-            }
-        }
-
-        // 3. 基于5秒间隔选择帧
-        let mut last_added_timestamp: Option<chrono::DateTime<chrono::Utc>> = None;
-
-        for (i, frame) in all_frames.iter().enumerate() {
-            // 如果已经被选中（第一帧、最后一帧或关键时间点），跳过间隔检查
-            if selected_indices.contains(&i) {
-                sampled.push((i, frame.file_path.clone()));
-                last_added_timestamp = Some(frame.timestamp);
-                continue;
-            }
-
-            // 检查与上一个添加帧的时间间隔
-            if let Some(last_time) = last_added_timestamp {
-                let time_diff_ms =
-                    frame.timestamp.timestamp_millis() - last_time.timestamp_millis();
-                if time_diff_ms >= 5000 {
-                    // 间隔大于等于5秒，添加此帧
-                    sampled.push((i, frame.file_path.clone()));
-                    last_added_timestamp = Some(frame.timestamp);
-                }
-            }
-        }
-
-        // 按索引排序，确保帧的顺序正确
-        sampled.sort_by_key(|(idx, _)| *idx);
-
-        // 去重并提取文件路径
-        let mut result = Vec::new();
-        let mut seen = HashSet::new();
-        for (_, path) in sampled {
-            if seen.insert(path.clone()) {
-                result.push(path);
-            }
-        }
-
-        info!(
-            "视频抽帧：原始 {} 帧，抽样后 {} 帧（基于时间戳，5秒间隔+关键时间点）",
-            all_frames.len(),
-            result.len()
-        );
-
-        // 打印调试信息：显示选中的帧的时间戳
-        for (i, frame) in all_frames.iter().enumerate() {
-            if result.contains(&frame.file_path) {
-                debug!(
-                    "选中帧 {}: 时间 {}:{}:{}",
-                    i,
-                    frame.timestamp.minute(),
-                    frame.timestamp.second(),
-                    frame.timestamp.timestamp_subsec_millis()
-                );
-            }
-        }
-
-        result
-    };
+    info!(
+        "视频抽帧：原始 {} 帧，抽样后 {} 帧（每{}秒取一帧）",
+        all_frames.len(),
+        frame_paths.len(),
+        FRAME_SAMPLE_INTERVAL_SECONDS
+    );
 
     // 生成输出路径
     let output_path = state
@@ -538,13 +522,17 @@ async fn generate_video(
         .output_dir
         .join(format!("session_{}.mp4", session_id));
 
-    // 配置视频参数
+    // 从设置中读取视频配置
+    let app_config = state.settings.get().await;
     let mut config = video::VideoConfig::default();
+    config.quality = app_config.video_config.quality;
+    config.add_timestamp = app_config.video_config.add_timestamp;
+
     if let Some(speed) = speed_multiplier {
         config.speed_multiplier = speed;
     } else {
-        // 默认4倍速播放
-        config.speed_multiplier = 8.0;
+        // 使用配置中的速度，而不是硬编码
+        config.speed_multiplier = app_config.video_config.speed_multiplier;
     }
 
     // 生成视频
@@ -684,11 +672,22 @@ async fn test_generate_videos(
             .map(|path| path.to_string_lossy().to_string())
             .collect();
 
-        info!("生成视频段: {} ({} 帧)", output_name, frame_list.len());
+        // 应用帧过滤：每5秒选择一张图片
+        let filtered_frame_list = video::filter_frames_by_interval(
+            frame_list.clone(),
+            FRAME_SAMPLE_INTERVAL_SECONDS as usize
+        );
+
+        info!(
+            "生成视频段: {} (原始 {} 帧，抽样后 {} 帧)",
+            output_name,
+            frame_list.len(),
+            filtered_frame_list.len()
+        );
 
         match state
             .video_processor
-            .create_summary_video(frame_list, &output_path, &video_config)
+            .create_summary_video(filtered_frame_list, &output_path, &video_config)
             .await
         {
             Ok(result) => {
@@ -886,14 +885,14 @@ async fn delete_session(
 
     // 删除视频文件（如果存在）
     if let Some(video_path) = &session_detail.session.video_path {
-        if let Err(e) = std::fs::remove_file(video_path) {
+        if let Err(e) = tokio::fs::remove_file(video_path).await {
             error!("删除视频文件失败: {}", e);
         }
     }
 
     // 删除帧文件
     for frame in &session_detail.frames {
-        if let Err(e) = std::fs::remove_file(&frame.file_path) {
+        if let Err(e) = tokio::fs::remove_file(&frame.file_path).await {
             error!("删除帧文件失败: {}", e);
         }
     }
@@ -1107,6 +1106,41 @@ async fn regenerate_timeline(
     ))
 }
 
+/// 通用的打开文件夹函数，支持跨平台
+fn open_folder_in_explorer(path: &Path) -> Result<(), String> {
+    // 确保目录存在
+    if !path.exists() {
+        std::fs::create_dir_all(&path).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+
+    // 根据操作系统打开文件夹
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件夹: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件夹: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("无法打开文件夹: {}", e))?;
+    }
+
+    Ok(())
+}
+
 /// 打开存储文件夹
 #[tauri::command]
 async fn open_storage_folder(
@@ -1119,37 +1153,7 @@ async fn open_storage_folder(
         _ => return Err(format!("未知的文件夹类型: {}", folder_type)),
     };
 
-    // 确保目录存在
-    if !path.exists() {
-        std::fs::create_dir_all(&path).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-
-    // 根据操作系统打开文件夹
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("无法打开文件夹: {}", e))?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("无法打开文件夹: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("无法打开文件夹: {}", e))?;
-    }
-
-    Ok(())
+    open_folder_in_explorer(&path)
 }
 
 /// 获取日志目录路径
@@ -1185,38 +1189,8 @@ fn open_log_folder() -> Result<(), String> {
             .join(".local/share/screen-analyzer/logs")
     };
 
-    // 确保目录存在
-    if !log_dir.exists() {
-        std::fs::create_dir_all(&log_dir).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-
-    // 根据操作系统打开文件夹
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&log_dir)
-            .spawn()
-            .map_err(|e| format!("无法打开日志文件夹: {}", e))?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&log_dir)
-            .spawn()
-            .map_err(|e| format!("无法打开日志文件夹: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&log_dir)
-            .spawn()
-            .map_err(|e| format!("无法打开日志文件夹: {}", e))?;
-    }
-
-    info!("已打开日志文件夹: {:?}", log_dir);
-    Ok(())
+    info!("打开日志文件夹: {:?}", log_dir);
+    open_folder_in_explorer(&log_dir)
 }
 
 /// 测试LLM API连接
@@ -1489,11 +1463,11 @@ async fn process_historical_frames(state: &AppState) {
                                 .execute(pool)
                                 .await;
 
-                                // 删除已合并到视频的图片文件
+                                // 删除已合并到视频的图片文件（使用异步 I/O）
                                 let mut deleted_count = 0;
                                 for frame_path in &frame_paths {
                                     if std::path::Path::new(frame_path).exists() {
-                                        if let Err(e) = std::fs::remove_file(frame_path) {
+                                        if let Err(e) = tokio::fs::remove_file(frame_path).await {
                                             error!("删除图片失败 {}: {}", frame_path, e);
                                         } else {
                                             deleted_count += 1;
@@ -1650,7 +1624,8 @@ pub fn run() {
             {
                 let state_clone = state.clone();
                 std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let rt = tokio::runtime::Runtime::new()
+                        .expect("无法创建 Tokio 运行时，程序无法继续运行");
                     rt.block_on(async {
                         info!("启动后台任务...");
 
@@ -1738,6 +1713,7 @@ pub fn run() {
             get_app_config,
             update_config,
             add_manual_tag,
+            remove_tag,
             get_system_status,
             toggle_capture,
             trigger_analysis,
@@ -1770,7 +1746,8 @@ struct VideoAnalysisReport {
 }
 
 struct VideoAnalysisOutcome {
-    _session_id: i64,
+    #[allow(dead_code)]
+    _session_id: i64, // 保留用于未来可能的扩展
     segments_count: usize,
     timeline_count: usize,
     summary: llm::SessionSummary,
@@ -2006,9 +1983,10 @@ async fn analyze_unprocessed_videos(
 
     let videos_dir = state.video_processor.output_dir.clone();
 
+    // 使用异步 I/O 读取目录
     let mut video_files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&videos_dir) {
-        for entry in entries.flatten() {
+    if let Ok(mut entries) = tokio::fs::read_dir(&videos_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
                 video_files.push(path);
@@ -2065,6 +2043,7 @@ async fn analyze_unprocessed_videos(
         });
     }
 
+    // 使用单一的原子操作更新状态
     if mark_status {
         let mut status = state.system_status.write().await;
         status.is_processing = true;
@@ -2143,14 +2122,14 @@ async fn analyze_unprocessed_videos(
         }
     }
 
-    let error_clone = processing_error.clone();
+    // 使用单一的原子操作更新所有状态字段
     {
         let mut status = state.system_status.write().await;
         if mark_status {
             status.is_processing = false;
         }
         status.last_process_time = Some(chrono::Utc::now());
-        status.last_error = error_clone.clone();
+        status.last_error = processing_error.clone();
     }
 
     if let Some(err) = processing_error {

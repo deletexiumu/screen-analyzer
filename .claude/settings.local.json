@@ -19,7 +19,8 @@
       "Bash(brew install:*)",
       "Bash(ffmpeg:*)",
       "Bash(otool:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Read(//c/Users/sqj19/.claude/**)"
     ],
     "deny": [],
     "ask": []

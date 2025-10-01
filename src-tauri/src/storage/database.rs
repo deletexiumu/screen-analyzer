@@ -26,6 +26,9 @@ impl Database {
         // 创建连接池 - 添加 ?mode=rwc 参数确保创建数据库
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
+            .idle_timeout(std::time::Duration::from_secs(300))      // 5分钟空闲超时
+            .max_lifetime(std::time::Duration::from_secs(1800))     // 30分钟最大生命周期
+            .acquire_timeout(std::time::Duration::from_secs(30))    // 30秒获取超时
             .connect(&format!("sqlite:{}?mode=rwc", db_path))
             .await?;
 
@@ -78,6 +81,15 @@ impl Database {
             .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_frames_session_id ON frames(session_id)")
+            .execute(&self.pool)
+            .await?;
+
+        // 为 get_activities 查询优化添加组合索引
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_sessions_start_end ON sessions(start_time, end_time)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_frames_session_timestamp ON frames(session_id, timestamp)")
             .execute(&self.pool)
             .await?;
 

@@ -2,10 +2,54 @@
 
 use super::ScreenCapture;
 use anyhow::{anyhow, Result};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
+
+/// 窗口跟踪器 - 用于跟踪已处理的窗口，防止内存泄漏
+struct WindowTracker {
+    /// 已处理的窗口集合
+    processed: HashSet<i64>,
+    /// 窗口队列，用于按顺序移除旧窗口
+    queue: VecDeque<i64>,
+    /// 最大容量
+    max_size: usize,
+}
+
+impl WindowTracker {
+    /// 创建新的窗口跟踪器
+    fn new(max_size: usize) -> Self {
+        Self {
+            processed: HashSet::new(),
+            queue: VecDeque::new(),
+            max_size,
+        }
+    }
+
+    /// 检查窗口是否已处理
+    fn contains(&self, key: &i64) -> bool {
+        self.processed.contains(key)
+    }
+
+    /// 插入新窗口
+    fn insert(&mut self, key: i64) {
+        // 如果已经存在，不需要重复插入
+        if self.processed.contains(&key) {
+            return;
+        }
+
+        // 如果达到最大容量，移除最旧的窗口
+        if self.queue.len() >= self.max_size {
+            if let Some(old_key) = self.queue.pop_front() {
+                self.processed.remove(&old_key);
+            }
+        }
+
+        self.processed.insert(key);
+        self.queue.push_back(key);
+    }
+}
 
 /// 截屏调度器
 pub struct CaptureScheduler {
@@ -60,7 +104,7 @@ impl CaptureScheduler {
                     Err(e) => {
                         // 黑屏不是真正的错误，只记录trace级别日志
                         if e.to_string().contains("黑屏") {
-                            trace!("初始截屏检测到黑屏，已跳过");
+                            debug!("初始截屏检测到黑屏，已跳过");
                         } else {
                             error!("初始截屏失败: {}", e);
                         }
@@ -103,7 +147,8 @@ impl CaptureScheduler {
         let session_mins = self.session_duration;
 
         tokio::task::spawn(async move {
-            let mut processed_windows: HashSet<i64> = HashSet::new();
+            // 使用 WindowTracker 限制内存使用，最多保留 1000 个窗口记录
+            let mut processed_windows = WindowTracker::new(1000);
             let check_interval = Duration::from_secs(60);
 
             info!("会话处理任务已启动，每60秒扫描待处理图片");
@@ -142,7 +187,7 @@ impl CaptureScheduler {
         capture: Arc<ScreenCapture>,
         session_processor: Arc<dyn SessionProcessor + Send + Sync>,
         session_duration: u64,
-        processed_windows: &mut HashSet<i64>,
+        processed_windows: &mut WindowTracker,
     ) -> Result<()> {
         use chrono::{TimeZone, Utc};
 

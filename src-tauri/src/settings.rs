@@ -65,6 +65,9 @@ impl SettingsManager {
         if let Some(capture) = update.capture_settings {
             config.capture_settings = Some(capture);
         }
+        if let Some(logger) = update.logger_settings {
+            config.logger_settings = Some(logger);
+        }
 
         self.save(&config).await?;
         Ok(config.clone())

@@ -3,7 +3,7 @@
 pub mod ffmpeg_helper;
 pub mod processor;
 
-pub use processor::{VideoConfig, VideoFormat, VideoProcessor};
+pub use processor::{filter_frames_by_interval, VideoConfig, VideoFormat, VideoProcessor};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};

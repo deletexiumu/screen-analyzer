@@ -529,6 +529,18 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
             if app_config.video_config.auto_generate {
                 info!("自动生成会话视频...");
 
+                // 应用帧过滤：每5秒选择一张图片（假设原始截图是1fps）
+                let filtered_frame_paths = crate::video::filter_frames_by_interval(
+                    all_frame_paths.clone(),
+                    5 // 每5秒取一帧
+                );
+
+                info!(
+                    "视频抽帧：原始 {} 帧，抽样后 {} 帧（每5秒取一帧）",
+                    all_frame_paths.len(),
+                    filtered_frame_paths.len()
+                );
+
                 let file_label = format!(
                     "{}-{}",
                     window.start.format("%Y%m%d%H%M"),
@@ -544,7 +556,7 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
                 video_config.add_timestamp = app_config.video_config.add_timestamp;
 
                 match video_processor
-                    .create_summary_video(all_frame_paths.clone(), &output_path, &video_config)
+                    .create_summary_video(filtered_frame_paths.clone(), &output_path, &video_config)
                     .await
                 {
                     Ok(result) => {

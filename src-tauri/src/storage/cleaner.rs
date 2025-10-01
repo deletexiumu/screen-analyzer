@@ -88,18 +88,33 @@ impl StorageCleaner {
         let deleted_count = self.db.delete_old_sessions(cutoff_date).await?;
 
         // 3. 删除关联的文件
-        if deleted_count > 0 {
-            self.cleanup_files(old_sessions).await?;
-        }
+        let failed_files = if deleted_count > 0 {
+            self.cleanup_files(old_sessions).await?
+        } else {
+            Vec::new()
+        };
 
         // 4. 清理孤立文件（没有数据库记录的文件）
         self.cleanup_orphaned_files().await?;
+
+        // 5. 记录清理结果
+        if !failed_files.is_empty() {
+            error!("清理完成，但有 {} 个文件删除失败", failed_files.len());
+            for (path, err) in &failed_files {
+                error!("  - {}: {}", path, err);
+            }
+        }
 
         info!("清理完成，删除了 {} 个会话", deleted_count);
         Ok(())
     }
 
     /// 获取要删除的会话及其文件信息
+    /// 获取旧会话及其关联的文件路径
+    ///
+    /// TODO: 实现完整的旧会话查询逻辑
+    /// 预计在 v1.2 版本实现
+    #[allow(unused)]
     async fn get_old_sessions_with_files(
         &self,
         cutoff_date: &chrono::DateTime<Utc>,
@@ -109,13 +124,16 @@ impl StorageCleaner {
         Ok(vec![])
     }
 
-    /// 清理文件
-    async fn cleanup_files(&self, sessions: Vec<SessionFiles>) -> Result<()> {
+    /// 清理文件，返回失败列表
+    async fn cleanup_files(&self, sessions: Vec<SessionFiles>) -> Result<Vec<(String, String)>> {
+        let mut failed_files = Vec::new();
+
         for session in sessions {
             // 删除帧文件
             for frame_path in session.frame_paths {
                 if let Err(e) = tokio::fs::remove_file(&frame_path).await {
                     error!("删除帧文件失败 {}: {}", frame_path, e);
+                    failed_files.push((frame_path.clone(), e.to_string()));
                 }
             }
 
@@ -123,11 +141,12 @@ impl StorageCleaner {
             if let Some(video_path) = session.video_path {
                 if let Err(e) = tokio::fs::remove_file(&video_path).await {
                     error!("删除视频文件失败 {}: {}", video_path, e);
+                    failed_files.push((video_path.clone(), e.to_string()));
                 }
             }
         }
 
-        Ok(())
+        Ok(failed_files)
     }
 
     /// 清理孤立文件（数据库中没有记录的文件）
@@ -231,6 +250,17 @@ impl StorageCleaner {
 struct SessionFiles {
     frame_paths: Vec<String>,
     video_path: Option<String>,
+}
+
+/// 清理结果
+#[derive(Debug, Default)]
+pub struct CleanupResult {
+    /// 删除的会话数
+    pub sessions_deleted: usize,
+    /// 释放的空间
+    pub space_freed: u64,
+    /// 删除失败的文件列表（路径，错误信息）
+    pub failed_files: Vec<(String, String)>,
 }
 
 /// 存储统计信息

@@ -19,10 +19,18 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
         let path = PathBuf::from(path_str);
         if path.exists() {
             // 验证可执行
-            if let Ok(output) = std::process::Command::new(&path)
-                .arg("-version")
-                .output()
+            let mut command = std::process::Command::new(&path);
+            command.arg("-version");
+
+            // Windows下隐藏控制台窗口
+            #[cfg(target_os = "windows")]
             {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                command.creation_flags(CREATE_NO_WINDOW);
+            }
+
+            if let Ok(output) = command.output() {
                 if output.status.success() {
                     info!("使用系统FFmpeg: {:?}", path);
                     return Ok(path);
@@ -32,10 +40,18 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
     }
 
     // 尝试 PATH 环境变量中的 ffmpeg
-    if let Ok(output) = std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
+    let mut command = std::process::Command::new("ffmpeg");
+    command.arg("-version");
+
+    // Windows下隐藏控制台窗口
+    #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    if let Ok(output) = command.output() {
         if output.status.success() {
             info!("使用PATH中的FFmpeg");
             return Ok(PathBuf::from("ffmpeg"));
@@ -59,18 +75,16 @@ fn get_bundled_ffmpeg_path() -> Result<PathBuf> {
     // 获取资源目录
     let resource_dir = get_resource_dir()?;
 
-    // 根据操作系统选择对应的FFmpeg
-    let ffmpeg_name = if cfg!(target_os = "windows") {
-        "ffmpeg/windows/ffmpeg.exe"
+    // 根据操作系统选择对应的FFmpeg，使用 PathBuf::join 确保跨平台兼容
+    let ffmpeg_path = if cfg!(target_os = "windows") {
+        resource_dir.join("ffmpeg").join("windows").join("ffmpeg.exe")
     } else if cfg!(target_os = "macos") {
-        "ffmpeg/macos/ffmpeg"
+        resource_dir.join("ffmpeg").join("macos").join("ffmpeg")
     } else if cfg!(target_os = "linux") {
-        "ffmpeg/linux/ffmpeg"
+        resource_dir.join("ffmpeg").join("linux").join("ffmpeg")
     } else {
         return Err(anyhow!("不支持的操作系统"));
     };
-
-    let ffmpeg_path = resource_dir.join(ffmpeg_name);
 
     // 在Unix系统上，确保可执行权限
     #[cfg(unix)]
@@ -157,10 +171,18 @@ fn get_resource_dir() -> Result<PathBuf> {
 pub async fn check_ffmpeg_available() -> bool {
     match get_ffmpeg_path() {
         Ok(path) => {
-            let result = tokio::process::Command::new(&path)
-                .arg("-version")
-                .output()
-                .await;
+            let mut command = tokio::process::Command::new(&path);
+            command.arg("-version");
+
+            // Windows下隐藏控制台窗口
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                command.creation_flags(CREATE_NO_WINDOW);
+            }
+
+            let result = command.output().await;
 
             match result {
                 Ok(output) => {
