@@ -9,10 +9,11 @@ pub use plugin::{
 };
 pub use qwen::QwenProvider;
 
+use crate::capture::scheduler::SessionProcessor;
 use crate::settings::SettingsManager;
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 /// LLM管理器
@@ -451,7 +452,7 @@ pub(crate) fn relative_to_absolute(
 
 /// LLM处理器（实现SessionProcessor trait）
 pub struct LLMProcessor {
-    manager: Arc<Mutex<LLMManager>>,
+    llm_handle: crate::actors::LLMHandle,
     db: Arc<crate::storage::Database>,
     video_processor: Option<Arc<crate::video::VideoProcessor>>,
     settings: Arc<SettingsManager>,
@@ -467,12 +468,12 @@ pub struct TimelineAnalysis {
 
 impl LLMProcessor {
     pub fn new(
-        manager: Arc<Mutex<LLMManager>>,
+        llm_handle: crate::actors::LLMHandle,
         db: Arc<crate::storage::Database>,
         settings: Arc<SettingsManager>,
     ) -> Self {
         Self {
-            manager,
+            llm_handle,
             db,
             video_processor: None,
             settings,
@@ -480,17 +481,165 @@ impl LLMProcessor {
     }
 
     pub fn with_video_processor(
-        manager: Arc<Mutex<LLMManager>>,
+        llm_handle: crate::actors::LLMHandle,
         db: Arc<crate::storage::Database>,
         video_processor: Arc<crate::video::VideoProcessor>,
         settings: Arc<SettingsManager>,
     ) -> Self {
         Self {
-            manager,
+            llm_handle,
             db,
             video_processor: Some(video_processor),
             settings,
         }
+    }
+
+    /// 启动事件监听器 - 监听SessionCompleted事件并执行分析
+    pub async fn start_event_listener(
+        self: Arc<Self>,
+        event_bus: Arc<crate::event_bus::EventBus>,
+        capture: Arc<crate::capture::ScreenCapture>,
+    ) {
+        let mut receiver = event_bus.subscribe();
+
+        tokio::spawn(async move {
+            info!("LLM处理器事件监听器已启动");
+
+            while let Ok(event) = receiver.recv().await {
+                match event {
+                    crate::event_bus::AppEvent::SessionCompleted {
+                        session_id,
+                        frame_count,
+                        window_start,
+                        window_end,
+                    } => {
+                        info!(
+                            "收到会话完成事件: session_id={}, frames={}, 时间段: {} - {}",
+                            session_id, frame_count, window_start, window_end
+                        );
+
+                        // 发布分析开始事件
+                        event_bus.publish(crate::event_bus::AppEvent::AnalysisStarted { session_id });
+
+                        // 读取该时间段的所有frames
+                        let frames_result = Self::load_frames_for_window(
+                            &capture,
+                            session_id,
+                            window_start,
+                            window_end,
+                        ).await;
+
+                        let frames = match frames_result {
+                            Ok(f) => f,
+                            Err(e) => {
+                                error!("读取frames失败: {}", e);
+                                event_bus.publish(crate::event_bus::AppEvent::AnalysisFailed {
+                                    session_id,
+                                    error: e.to_string(),
+                                });
+                                continue;
+                            }
+                        };
+
+                        if frames.is_empty() {
+                            warn!("该时间段没有有效frames，跳过分析");
+                            event_bus.publish(crate::event_bus::AppEvent::AnalysisFailed {
+                                session_id,
+                                error: "没有有效frames".to_string(),
+                            });
+                            continue;
+                        }
+
+                        // 构建SessionWindow
+                        let window = crate::capture::scheduler::SessionWindow {
+                            start: window_start,
+                            end: window_end,
+                        };
+
+                        // 执行分析
+                        match self.process_session(frames, window).await {
+                            Ok(_) => {
+                                info!("会话分析完成: session_id={}", session_id);
+                                // 注意：AnalysisCompleted事件将在未来由独立的分析流程发布
+                                // 当前process_session包含了完整的处理，包括视频生成
+                                // 这里暂时不发布AnalysisCompleted，避免重复处理
+                            }
+                            Err(e) => {
+                                error!("会话分析失败: session_id={}, 错误: {}", session_id, e);
+                                event_bus.publish(crate::event_bus::AppEvent::AnalysisFailed {
+                                    session_id,
+                                    error: e.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            warn!("LLM处理器事件监听器已停止");
+        });
+    }
+
+    /// 根据时间窗口加载frames
+    async fn load_frames_for_window(
+        capture: &Arc<crate::capture::ScreenCapture>,
+        session_id: i64,
+        window_start: chrono::DateTime<chrono::Utc>,
+        window_end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::capture::ScreenFrame>> {
+        use chrono::TimeZone;
+
+        let frames_dir = capture.frames_dir();
+        if !frames_dir.exists() {
+            return Err(anyhow!("frames目录不存在"));
+        }
+
+        let mut frames = Vec::new();
+        let mut entries = tokio::fs::read_dir(&frames_dir).await?;
+
+        let start_ms = window_start.timestamp_millis();
+        let end_ms = window_end.timestamp_millis();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+            if !extension.eq_ignore_ascii_case("jpg") {
+                continue;
+            }
+
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+
+            let Ok(timestamp_ms) = stem.parse::<i64>() else {
+                continue;
+            };
+
+            // 检查是否在时间窗口内
+            if timestamp_ms >= start_ms && timestamp_ms < end_ms {
+                let Some(timestamp) = chrono::Utc.timestamp_millis_opt(timestamp_ms).single() else {
+                    continue;
+                };
+
+                frames.push(crate::capture::ScreenFrame {
+                    timestamp,
+                    file_path: path.to_string_lossy().to_string(),
+                    screen_id: 0,
+                });
+            }
+        }
+
+        // 按时间排序
+        frames.sort_by_key(|f| f.timestamp);
+
+        info!("加载了 {} 个frames用于会话分析 (session_id={})", frames.len(), session_id);
+        Ok(frames)
     }
 }
 
@@ -502,10 +651,7 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         window: crate::capture::scheduler::SessionWindow,
     ) -> Result<()> {
         // 获取配置
-        let config = {
-            let manager = self.manager.lock().await;
-            manager.get_config().await
-        };
+        let config = self.llm_handle.get_config().await?;
         let params = &config.analysis_params;
 
         // 采样帧
@@ -606,26 +752,19 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         let video_path_for_cleanup = video_path.clone();
 
         // 更新provider的视频路径
-        {
-            let mut manager = self.manager.lock().await;
-            manager.set_video_path(video_path.clone());
-        }
+        self.llm_handle.set_video_path(video_path.clone()).await?;
 
         // 设置provider的数据库连接和session_id
-        {
-            let mut manager = self.manager.lock().await;
-            manager.set_provider_database(self.db.clone(), Some(session_id));
+        self.llm_handle.set_provider_database(self.db.clone(), Some(session_id)).await?;
 
-            // 设置视频速率乘数
-            let app_config = self.settings.get().await;
-            let speed_multiplier = app_config.video_config.speed_multiplier;
-            manager.set_video_speed(speed_multiplier);
-        }
+        // 设置视频速率乘数
+        let app_config = self.settings.get().await;
+        let speed_multiplier = app_config.video_config.speed_multiplier;
+        self.llm_handle.set_video_speed(speed_multiplier).await?;
 
         // 使用两阶段分析：先分段，再生成时间线
         let analysis = {
-            let mut manager = self.manager.lock().await;
-            match manager
+            match self.llm_handle
                 .segment_video_and_generate_timeline(frame_paths, duration_minutes, None)
                 .await {
                 Ok(result) => result,
@@ -779,10 +918,7 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         );
 
         // 清理provider的视频路径，避免影响后续会话
-        {
-            let mut manager = self.manager.lock().await;
-            manager.set_video_path(None);
-        }
+        self.llm_handle.set_video_path(None).await?;
         Ok(())
     }
 }

@@ -1,0 +1,264 @@
+// LLM Manager Actor - 使用Actor模式管理LLM状态
+//
+// 用消息传递替代锁机制，消除Arc<Mutex<LLMManager>>的锁竞争
+
+use tokio::sync::{mpsc, oneshot};
+use anyhow::Result;
+use crate::llm::{LLMManager, LLMConfig, QwenConfig, SessionSummary};
+
+use crate::llm::{TimelineAnalysis, TimelineCard, VideoSegment};
+use crate::storage::Database;
+use std::sync::Arc;
+
+/// LLM管理器命令
+pub enum LLMCommand {
+    /// 配置LLM
+    Configure {
+        config: QwenConfig,
+        reply: oneshot::Sender<Result<()>>,
+    },
+
+    /// 分析帧
+    AnalyzeFrames {
+        frames: Vec<String>,
+        reply: oneshot::Sender<Result<SessionSummary>>,
+    },
+
+    /// 获取配置
+    GetConfig {
+        reply: oneshot::Sender<LLMConfig>,
+    },
+
+    /// 设置视频路径
+    SetVideoPath {
+        video_path: Option<String>,
+    },
+
+    /// 设置视频速率
+    SetVideoSpeed {
+        speed_multiplier: f32,
+    },
+
+    /// 设置provider的数据库连接
+    SetProviderDatabase {
+        db: Arc<Database>,
+        session_id: Option<i64>,
+    },
+
+    /// 分析视频并生成时间线（两阶段处理）
+    SegmentVideoAndGenerateTimeline {
+        frames: Vec<String>,
+        duration: u32,
+        previous_cards: Option<Vec<TimelineCard>>,
+        reply: oneshot::Sender<Result<TimelineAnalysis>>,
+    },
+
+    /// 获取最后一次LLM调用的ID
+    GetLastCallId {
+        call_type: String,
+        reply: oneshot::Sender<Option<i64>>,
+    },
+
+    /// 生成时间线卡片
+    GenerateTimeline {
+        segments: Vec<VideoSegment>,
+        previous_cards: Option<Vec<TimelineCard>>,
+        reply: oneshot::Sender<Result<Vec<TimelineCard>>>,
+    },
+}
+
+/// LLM Manager Actor（无需外层Mutex）
+pub struct LLMManagerActor {
+    receiver: mpsc::Receiver<LLMCommand>,
+    manager: LLMManager,  // 直接持有，无需锁
+}
+
+impl LLMManagerActor {
+    /// 创建新的Actor
+    pub fn new(manager: LLMManager) -> (Self, LLMHandle) {
+        let (sender, receiver) = mpsc::channel(100);
+        let actor = Self { receiver, manager };
+        let handle = LLMHandle { sender };
+        (actor, handle)
+    }
+
+    /// 运行Actor（在单独的任务中运行）
+    pub async fn run(mut self) {
+        tracing::info!("LLM Manager Actor 已启动");
+
+        while let Some(cmd) = self.receiver.recv().await {
+            match cmd {
+                LLMCommand::Configure { config, reply } => {
+                    let result = self.manager.configure(config).await;
+                    let _ = reply.send(result);
+                }
+
+                LLMCommand::AnalyzeFrames { frames, reply } => {
+                    let result = self.manager.analyze_frames(frames).await;
+                    let _ = reply.send(result);
+                }
+
+                LLMCommand::GetConfig { reply } => {
+                    let config = self.manager.get_config().await;
+                    let _ = reply.send(config);
+                }
+
+                LLMCommand::SetVideoPath { video_path } => {
+                    self.manager.set_video_path(video_path);
+                }
+
+                LLMCommand::SetVideoSpeed { speed_multiplier } => {
+                    self.manager.set_video_speed(speed_multiplier);
+                }
+
+                LLMCommand::SetProviderDatabase { db, session_id } => {
+                    self.manager.set_provider_database(db, session_id);
+                }
+
+                LLMCommand::SegmentVideoAndGenerateTimeline {
+                    frames,
+                    duration,
+                    previous_cards,
+                    reply,
+                } => {
+                    let result = self.manager
+                        .segment_video_and_generate_timeline(frames, duration, previous_cards)
+                        .await;
+                    let _ = reply.send(result);
+                }
+
+                LLMCommand::GetLastCallId { call_type, reply } => {
+                    let id = self.manager.get_last_call_id(&call_type);
+                    let _ = reply.send(id);
+                }
+
+                LLMCommand::GenerateTimeline {
+                    segments,
+                    previous_cards,
+                    reply,
+                } => {
+                    let result = self.manager.generate_timeline(segments, previous_cards).await;
+                    let _ = reply.send(result);
+                }
+            }
+        }
+
+        tracing::info!("LLM Manager Actor 已停止");
+    }
+}
+
+/// LLM Handle（用于与Actor通信，可克隆）
+#[derive(Clone)]
+pub struct LLMHandle {
+    sender: mpsc::Sender<LLMCommand>,
+}
+
+impl LLMHandle {
+    /// 配置LLM
+    pub async fn configure(&self, config: QwenConfig) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::Configure { config, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
+    /// 分析帧
+    pub async fn analyze_frames(&self, frames: Vec<String>) -> Result<SessionSummary> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::AnalyzeFrames { frames, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
+    /// 获取配置
+    pub async fn get_config(&self) -> Result<LLMConfig> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::GetConfig { reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        Ok(rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?)
+    }
+
+    /// 设置视频路径
+    pub async fn set_video_path(&self, video_path: Option<String>) -> Result<()> {
+        self.sender
+            .send(LLMCommand::SetVideoPath { video_path })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        Ok(())
+    }
+
+    /// 设置视频速率
+    pub async fn set_video_speed(&self, speed_multiplier: f32) -> Result<()> {
+        self.sender
+            .send(LLMCommand::SetVideoSpeed { speed_multiplier })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        Ok(())
+    }
+
+    /// 设置provider的数据库连接
+    pub async fn set_provider_database(&self, db: Arc<Database>, session_id: Option<i64>) -> Result<()> {
+        self.sender
+            .send(LLMCommand::SetProviderDatabase { db, session_id })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        Ok(())
+    }
+
+    /// 分析视频并生成时间线（两阶段处理）
+    pub async fn segment_video_and_generate_timeline(
+        &self,
+        frames: Vec<String>,
+        duration: u32,
+        previous_cards: Option<Vec<TimelineCard>>,
+    ) -> Result<TimelineAnalysis> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::SegmentVideoAndGenerateTimeline {
+                frames,
+                duration,
+                previous_cards,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
+    /// 获取最后一次LLM调用的ID
+    pub async fn get_last_call_id(&self, call_type: &str) -> Option<i64> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::GetLastCallId {
+                call_type: call_type.to_string(),
+                reply,
+            })
+            .await
+            .ok()?;
+        rx.await.ok().flatten()
+    }
+
+    /// 生成时间线卡片
+    pub async fn generate_timeline(
+        &self,
+        segments: Vec<VideoSegment>,
+        previous_cards: Option<Vec<TimelineCard>>,
+    ) -> Result<Vec<TimelineCard>> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::GenerateTimeline {
+                segments,
+                previous_cards,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+}

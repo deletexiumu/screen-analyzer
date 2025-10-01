@@ -24,6 +24,8 @@ pub enum AppEvent {
     SessionCompleted {
         session_id: i64,
         frame_count: usize,
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
     },
 
     // --- 分析事件 ---
@@ -161,7 +163,9 @@ mod tests {
         // 发布事件
         bus.publish(AppEvent::SessionCompleted {
             session_id: 1,
-            frame_count: 10
+            frame_count: 10,
+            window_start: Utc::now(),
+            window_end: Utc::now(),
         });
 
         // 两个订阅者都应该收到事件

@@ -291,6 +291,8 @@ impl CaptureScheduler {
             event_bus.publish(AppEvent::SessionCompleted {
                 session_id: bucket_start_ms, // 使用bucket_start_ms作为临时session_id
                 frame_count,
+                window_start: window.start,
+                window_end: window.end,
             });
 
             // 标记为已处理

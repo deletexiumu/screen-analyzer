@@ -1,6 +1,7 @@
 // 屏幕活动分析器 - Tauri应用主库
 
 // 声明模块
+pub mod actors;
 pub mod capture;
 pub mod domains;
 pub mod event_bus;
@@ -14,8 +15,9 @@ pub mod video;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
-use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, error, info, trace, warn};
+// Actor模式不再需要Mutex和RwLock
+// use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, error, info, warn};
 
 // 导入必要的类型
 use capture::{scheduler::CaptureScheduler, ScreenCapture};
@@ -254,15 +256,14 @@ async fn remove_tag(
 /// 获取系统状态
 #[tauri::command]
 async fn get_system_status(state: tauri::State<'_, AppState>) -> Result<SystemStatus, String> {
-    let status = state.system_domain.get_status().read().await;
-    Ok(status.clone())
+    let status = state.system_domain.get_status_handle().get().await;
+    Ok(status)
 }
 
 /// 切换截屏状态（暂停/恢复）
 #[tauri::command]
 async fn toggle_capture(state: tauri::State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    let mut status = state.system_domain.get_status().write().await;
-    status.is_capturing = enabled;
+    state.system_domain.get_status_handle().set_capturing(enabled).await;
 
     if enabled {
         info!("恢复截屏");
@@ -308,11 +309,8 @@ async fn retry_session_analysis(
     info!("重新分析会话: {}", session_id);
 
     // 已移除 analysis_lock 临时方案，直接执行分析
-    {
-        let mut status = state.system_domain.get_status().write().await;
-        status.is_processing = true;
-        status.last_error = None;
-    }
+    state.system_domain.get_status_handle().set_processing(true).await;
+    state.system_domain.get_status_handle().set_error(None).await;
 
     let result = async {
         let session_detail = state
@@ -380,12 +378,9 @@ async fn retry_session_analysis(
 
     let last_error = result.as_ref().err().cloned();
 
-    {
-        let mut status = state.system_domain.get_status().write().await;
-        status.is_processing = false;
-        status.last_process_time = Some(chrono::Utc::now());
-        status.last_error = last_error.clone();
-    }
+    state.system_domain.get_status_handle().set_processing(false).await;
+    state.system_domain.get_status_handle().update_last_process_time(chrono::Utc::now()).await;
+    state.system_domain.get_status_handle().set_error(last_error.clone()).await;
 
     match result {
         Ok(outcome) => Ok(format!(
@@ -804,8 +799,7 @@ async fn configure_qwen(
     state: tauri::State<'_, AppState>,
     config: llm::QwenConfig,
 ) -> Result<(), String> {
-    let mut llm = state.analysis_domain.get_llm_manager().lock().await;
-    llm.configure(config).await.map_err(|e| e.to_string())
+    state.analysis_domain.get_llm_handle().configure(config).await.map_err(|e| e.to_string())
 }
 
 /// 配置LLM提供商（统一接口）
@@ -876,8 +870,7 @@ async fn configure_llm_provider(
         .map_err(|e| format!("保存配置失败: {}", e))?;
 
     // 配置内存中的LLM管理器
-    let mut llm = state.analysis_domain.get_llm_manager().lock().await;
-    llm.configure(qwen_config)
+    state.analysis_domain.get_llm_handle().configure(qwen_config)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1066,15 +1059,17 @@ async fn regenerate_timeline(
             .map_err(|e| format!("清除旧时间线失败: {}", e))?;
 
         // 使用LLM重新生成timeline
-        let mut llm_manager = state.analysis_domain.get_llm_manager().lock().await;
+        let llm_handle = state.analysis_domain.get_llm_handle();
         // 设置当前的 session_id，以便 LLM 调用记录能正确关联
-        llm_manager.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id));
+        llm_handle.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id)).await
+            .map_err(|e| format!("设置数据库失败: {}", e))?;
 
         // 设置视频速率乘数（虽然generate_timeline不直接使用，但保持一致性）
         let app_config = state.storage_domain.get_settings().get().await;
         let speed_multiplier = app_config.video_config.speed_multiplier;
-        llm_manager.set_video_speed(speed_multiplier);
-        let timeline_cards = match llm_manager.generate_timeline(video_segments, None).await {
+        llm_handle.set_video_speed(speed_multiplier).await
+            .map_err(|e| format!("设置视频速率失败: {}", e))?;
+        let timeline_cards = match llm_handle.generate_timeline(video_segments, None).await {
             Ok(cards) => cards,
             Err(e) => {
                 error!("生成timeline失败: {}", e);
@@ -1083,7 +1078,7 @@ async fn regenerate_timeline(
         };
 
         // 获取LLM调用ID
-        let timeline_call_id = llm_manager.get_last_call_id("generate_timeline");
+        let timeline_call_id = llm_handle.get_last_call_id("generate_timeline").await;
 
         total_cards += timeline_cards.len();
 
@@ -1580,8 +1575,12 @@ pub fn run() {
                     .build()
                     .expect("无法创建 HTTP 客户端");
 
-                // 初始化LLM管理器（传入共享HTTP客户端）
-                let llm_manager = Arc::new(Mutex::new(LLMManager::new(http_client.clone())));
+                // 初始化LLM管理器（使用Actor模式，无需外层锁）
+                let llm_manager = LLMManager::new(http_client.clone());
+                let (llm_actor, llm_handle) = actors::LLMManagerActor::new(llm_manager);
+
+                // 启动LLM Manager Actor
+                tokio::spawn(llm_actor.run());
 
                 // 初始化存储清理器
                 let cleaner = Arc::new(StorageCleaner::new(
@@ -1609,8 +1608,7 @@ pub fn run() {
                         video_path: None,
                     };
 
-                    let mut llm = llm_manager.lock().await;
-                    if let Err(e) = llm.configure(qwen_config).await {
+                    if let Err(e) = llm_handle.configure(qwen_config).await {
                         error!("加载LLM配置失败: {}", e);
                     } else {
                         info!("已从配置文件加载LLM设置");
@@ -1637,8 +1635,11 @@ pub fn run() {
                 );
                 let scheduler = Arc::new(scheduler_inner);
 
-                // 初始化系统状态
-                let system_status = Arc::new(RwLock::new(SystemStatus::default()));
+                // 初始化系统状态（使用Actor模式，无需锁）
+                let (status_actor, status_handle) = actors::SystemStatusActor::new();
+
+                // 启动System Status Actor
+                tokio::spawn(status_actor.run());
 
                 // 从配置中读取日志设置并应用
                 let initial_logger_settings = initial_config.logger_settings.unwrap_or_default();
@@ -1656,9 +1657,9 @@ pub fn run() {
                     scheduler.clone(),
                 ));
 
-                // 创建分析领域
+                // 创建分析领域（使用LLM Handle）
                 let analysis_domain = Arc::new(AnalysisDomain::new(
-                    llm_manager.clone(),
+                    llm_handle.clone(),
                     video_processor.clone(),
                 ));
 
@@ -1669,9 +1670,9 @@ pub fn run() {
                     settings.clone(),
                 ));
 
-                // 创建系统领域
+                // 创建系统领域（使用SystemStatus Handle）
                 let system_domain = Arc::new(SystemDomain::new(
-                    system_status,
+                    status_handle.clone(),
                     log_broadcaster.clone(),
                     http_client,
                 ));
@@ -1703,9 +1704,21 @@ pub fn run() {
                         info!("开始处理历史图片，生成视频...");
                         process_historical_frames(&state_clone).await;
 
-                        // TODO: 添加LLMProcessor和VideoProcessor的事件监听器
-                        // 暂时保留旧的LLMProcessor以保证功能可用
-                        // 后续将完全迁移到事件驱动架构
+                        // 创建LLMProcessor并启动事件监听器
+                        let llm_processor = Arc::new(llm::LLMProcessor::with_video_processor(
+                            state_clone.analysis_domain.get_llm_handle().clone(),
+                            state_clone.storage_domain.get_db().clone(),
+                            state_clone.analysis_domain.get_video_processor().clone(),
+                            state_clone.storage_domain.get_settings().clone(),
+                        ));
+
+                        // 启动LLM处理器事件监听器
+                        llm_processor.start_event_listener(
+                            state_clone.event_bus.clone(),
+                            state_clone.capture_domain.get_capture().clone(),
+                        ).await;
+
+                        info!("LLM处理器事件监听器已启动");
 
                         // 启动调度器（事件驱动模式）
                         state_clone.capture_domain.get_scheduler().clone().start(state_clone.event_bus.clone());
@@ -1744,10 +1757,7 @@ pub fn run() {
                         }
 
                         // 更新系统状态
-                        {
-                            let mut status = state_clone.system_domain.get_status().write().await;
-                            status.is_capturing = true;
-                        }
+                        state_clone.system_domain.get_status_handle().set_capturing(true).await;
 
                         info!("所有后台任务已启动");
 
@@ -1827,7 +1837,7 @@ async fn analyze_video_once(
         .unwrap_or("视频");
 
     let persisted_config = state.storage_domain.get_settings().get().await;
-    let mut llm = state.analysis_domain.get_llm_manager().lock().await;
+    let llm_handle = state.analysis_domain.get_llm_handle();
 
     let qwen_config = if let Some(llm_config) = persisted_config.llm_config {
         llm::QwenConfig {
@@ -1838,7 +1848,7 @@ async fn analyze_video_once(
             video_path: Some(video_path_str.clone()),
         }
     } else {
-        let config = llm.get_config().await;
+        let config = llm_handle.get_config().await.map_err(|e| e.to_string())?;
         llm::QwenConfig {
             api_key: config.qwen.api_key.clone(),
             model: config.qwen.model.clone(),
@@ -1852,7 +1862,7 @@ async fn analyze_video_once(
         return Err("请先在设置中配置LLM API Key".to_string());
     }
 
-    if let Err(e) = llm.configure(qwen_config).await {
+    if let Err(e) = llm_handle.configure(qwen_config).await {
         return Err(e.to_string());
     }
 
@@ -1865,7 +1875,7 @@ async fn analyze_video_once(
             .execute(state.storage_domain.get_db().get_pool())
             .await
         {
-            llm.set_video_path(None);
+            let _ = llm_handle.set_video_path(None).await;
             return Err(format!("清理历史视频分段失败: {}", e));
         }
 
@@ -1874,7 +1884,7 @@ async fn analyze_video_once(
             .execute(state.storage_domain.get_db().get_pool())
             .await
         {
-            llm.set_video_path(None);
+            let _ = llm_handle.set_video_path(None).await;
             return Err(format!("清理历史时间线卡片失败: {}", e));
         }
 
@@ -1894,25 +1904,27 @@ async fn analyze_video_once(
         match state.storage_domain.get_db().insert_session(&temp_session).await {
             Ok(id) => id,
             Err(e) => {
-                llm.set_video_path(None);
+                let _ = llm_handle.set_video_path(None).await;
                 return Err(e.to_string());
             }
         }
     };
 
-    llm.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id));
+    llm_handle.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id)).await
+        .map_err(|e| e.to_string())?;
 
     // 设置视频速率乘数（从配置获取）
     let speed_multiplier = persisted_config.video_config.speed_multiplier;
-    llm.set_video_speed(speed_multiplier);
+    llm_handle.set_video_speed(speed_multiplier).await
+        .map_err(|e| e.to_string())?;
 
-    let analysis = match llm
+    let analysis = match llm_handle
         .segment_video_and_generate_timeline(vec![], duration_minutes, None)
         .await
     {
         Ok(res) => res,
         Err(e) => {
-            llm.set_video_path(None);
+            let _ = llm_handle.set_video_path(None).await;
             let error_msg = e.to_string();
             // 检测是否是视频过短的错误
             if error_msg.contains("The video file is too short") {
@@ -1922,8 +1934,7 @@ async fn analyze_video_once(
         }
     };
 
-    llm.set_video_path(None);
-    drop(llm);
+    let _ = llm_handle.set_video_path(None).await;
 
     let mut segments = analysis.segments;
     for segment in &mut segments {
@@ -2102,9 +2113,8 @@ async fn analyze_unprocessed_videos(
 
     // 使用单一的原子操作更新状态
     if mark_status {
-        let mut status = state.system_domain.get_status().write().await;
-        status.is_processing = true;
-        status.last_error = None;
+        state.system_domain.get_status_handle().set_processing(true).await;
+        state.system_domain.get_status_handle().set_error(None).await;
     }
 
     let mut report = VideoAnalysisReport {
@@ -2180,14 +2190,11 @@ async fn analyze_unprocessed_videos(
     }
 
     // 使用单一的原子操作更新所有状态字段
-    {
-        let mut status = state.system_domain.get_status().write().await;
-        if mark_status {
-            status.is_processing = false;
-        }
-        status.last_process_time = Some(chrono::Utc::now());
-        status.last_error = processing_error.clone();
+    if mark_status {
+        state.system_domain.get_status_handle().set_processing(false).await;
     }
+    state.system_domain.get_status_handle().update_last_process_time(chrono::Utc::now()).await;
+    state.system_domain.get_status_handle().set_error(processing_error.clone()).await;
 
     if let Some(err) = processing_error {
         return Err(err);
