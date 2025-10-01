@@ -497,7 +497,7 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
                     "content": content_parts
                 }
             ],
-            "max_tokens": 2000,
+            "max_tokens": 8000,  // 增加到8000以支持长视频分析
             "temperature": 0.3
         });
 
@@ -572,6 +572,13 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         // 解析响应
         let response_data: QwenResponse = serde_json::from_str(&response_text)?;
 
+        // 检查 finish_reason，如果是 "length" 说明达到 token 限制
+        if let Some(finish_reason) = response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) {
+            if finish_reason == "length" {
+                warn!("LLM 响应因达到 token 限制而被截断 (finish_reason=length)");
+            }
+        }
+
         // 记录成功的响应
         llm_record.response_body = Some(response_text.clone());
         llm_record.latency_ms = Some(start_time.elapsed().as_millis() as i64);
@@ -591,7 +598,17 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
             }
         }
 
-        Ok(response_data.choices[0].message.content.clone())
+        let content = response_data.choices[0].message.content.clone();
+
+        // 如果响应被截断，返回错误而不是不完整的 JSON
+        if response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) == Some(&"length".to_string()) {
+            return Err(anyhow::anyhow!(
+                "LLM 响应被截断（达到 max_tokens 限制）。内容长度: {} 字符。请尝试缩短视频时长或联系管理员。",
+                content.len()
+            ));
+        }
+
+        Ok(content)
     }
 
     /// 调用Qwen API - 支持视频URL模式
@@ -643,7 +660,7 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
                     "content": user_content
                 }
             ],
-            "max_tokens": 2000,
+            "max_tokens": 8000,  // 增加到8000以支持长视频分析
             "temperature": 0.3
         });
 
@@ -724,6 +741,13 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         // 解析响应
         let response_data: QwenResponse = serde_json::from_str(&response_text)?;
 
+        // 检查 finish_reason，如果是 "length" 说明达到 token 限制
+        if let Some(finish_reason) = response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) {
+            if finish_reason == "length" {
+                warn!("LLM 响应因达到 token 限制而被截断 (finish_reason=length, 视频模式)");
+            }
+        }
+
         // 记录成功的响应
         llm_record.response_body = Some(response_text.clone());
         llm_record.latency_ms = Some(start_time.elapsed().as_millis() as i64);
@@ -743,7 +767,17 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
             }
         }
 
-        Ok(response_data.choices[0].message.content.clone())
+        let content = response_data.choices[0].message.content.clone();
+
+        // 如果响应被截断，返回错误而不是不完整的 JSON
+        if response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) == Some(&"length".to_string()) {
+            return Err(anyhow::anyhow!(
+                "LLM 响应被截断（达到 max_tokens 限制，视频模式）。内容长度: {} 字符。请尝试缩短视频时长或联系管理员。",
+                content.len()
+            ));
+        }
+
+        Ok(content)
     }
 
     /// 智能合并timeline cards
@@ -1218,6 +1252,7 @@ struct QwenResponse {
 #[derive(Debug, Deserialize)]
 struct QwenChoice {
     message: QwenMessage,
+    finish_reason: Option<String>,  // 完成原因：stop, length, etc
 }
 
 #[derive(Debug, Deserialize)]
