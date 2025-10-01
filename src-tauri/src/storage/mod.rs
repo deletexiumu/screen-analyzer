@@ -6,7 +6,6 @@ pub mod database;
 pub use cleaner::StorageCleaner;
 pub use database::Database;
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

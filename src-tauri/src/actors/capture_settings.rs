@@ -16,6 +16,11 @@ pub enum CaptureSettingsCommand {
     Get {
         reply: oneshot::Sender<CaptureSettings>,
     },
+
+    /// 健康检查（Ping）
+    HealthCheck {
+        reply: oneshot::Sender<()>,
+    },
 }
 
 /// 截屏设置Actor
@@ -47,6 +52,11 @@ impl CaptureSettingsActor {
                 CaptureSettingsCommand::Get { reply } => {
                     let _ = reply.send(self.settings.clone());
                 }
+
+                CaptureSettingsCommand::HealthCheck { reply } => {
+                    // 立即响应，表明Actor正常运行
+                    let _ = reply.send(());
+                }
             }
         }
 
@@ -71,5 +81,42 @@ impl CaptureSettingsHandle {
         let (reply, rx) = oneshot::channel();
         self.sender.send(CaptureSettingsCommand::Get { reply }).await.ok();
         rx.await.unwrap_or_default()
+    }
+
+    /// 健康检查 - 测试Actor是否响应
+    ///
+    /// 返回true表示Actor正常运行，false表示Actor无响应或已停止
+    /// 超时时间为5秒
+    pub async fn health_check(&self) -> bool {
+        let (reply, rx) = oneshot::channel();
+
+        // 尝试发送健康检查命令
+        if self.sender
+            .send(CaptureSettingsCommand::HealthCheck { reply })
+            .await
+            .is_err()
+        {
+            tracing::warn!("Capture Settings Actor 健康检查失败: 通道已关闭");
+            return false;
+        }
+
+        // 等待响应，超时5秒
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            rx
+        ).await {
+            Ok(Ok(())) => {
+                tracing::debug!("Capture Settings Actor 健康检查成功");
+                true
+            }
+            Ok(Err(_)) => {
+                tracing::warn!("Capture Settings Actor 健康检查失败: Actor已停止");
+                false
+            }
+            Err(_) => {
+                tracing::warn!("Capture Settings Actor 健康检查失败: 超时(5秒)");
+                false
+            }
+        }
     }
 }

@@ -65,6 +65,11 @@ pub enum LLMCommand {
         previous_cards: Option<Vec<TimelineCard>>,
         reply: oneshot::Sender<Result<Vec<TimelineCard>>>,
     },
+
+    /// 健康检查（Ping）
+    HealthCheck {
+        reply: oneshot::Sender<()>,
+    },
 }
 
 /// LLM Manager Actor（无需外层Mutex）
@@ -76,7 +81,7 @@ pub struct LLMManagerActor {
 impl LLMManagerActor {
     /// 创建新的Actor
     pub fn new(manager: LLMManager) -> (Self, LLMHandle) {
-        let (sender, receiver) = mpsc::channel(100);
+        let (sender, receiver) = mpsc::channel(200);  // 增加容量到200以支持高负载
         let actor = Self { receiver, manager };
         let handle = LLMHandle { sender };
         (actor, handle)
@@ -139,6 +144,11 @@ impl LLMManagerActor {
                 } => {
                     let result = self.manager.generate_timeline(segments, previous_cards).await;
                     let _ = reply.send(result);
+                }
+
+                LLMCommand::HealthCheck { reply } => {
+                    // 立即响应，表明Actor正常运行
+                    let _ = reply.send(());
                 }
             }
         }
@@ -260,5 +270,42 @@ impl LLMHandle {
             .await
             .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
         rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
+    /// 健康检查 - 测试Actor是否响应
+    ///
+    /// 返回true表示Actor正常运行，false表示Actor无响应或已停止
+    /// 超时时间为5秒
+    pub async fn health_check(&self) -> bool {
+        let (reply, rx) = oneshot::channel();
+
+        // 尝试发送健康检查命令
+        if self.sender
+            .send(LLMCommand::HealthCheck { reply })
+            .await
+            .is_err()
+        {
+            tracing::warn!("LLM Manager Actor 健康检查失败: 通道已关闭");
+            return false;
+        }
+
+        // 等待响应，超时5秒
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            rx
+        ).await {
+            Ok(Ok(())) => {
+                tracing::debug!("LLM Manager Actor 健康检查成功");
+                true
+            }
+            Ok(Err(_)) => {
+                tracing::warn!("LLM Manager Actor 健康检查失败: Actor已停止");
+                false
+            }
+            Err(_) => {
+                tracing::warn!("LLM Manager Actor 健康检查失败: 超时(5秒)");
+                false
+            }
+        }
     }
 }

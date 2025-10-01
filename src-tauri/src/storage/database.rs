@@ -6,7 +6,7 @@ use super::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
-use tracing::{error, info};
+use tracing::info;
 
 /// 数据库管理器
 pub struct Database {

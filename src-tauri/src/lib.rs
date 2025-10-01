@@ -1547,10 +1547,10 @@ pub fn run() {
             std::fs::create_dir_all(&videos_dir).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
-            // 初始化运行时
+            // 初始化运行时（仅用于初始化，不用于运行 Actor）
             let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
 
-            let state = runtime.block_on(async {
+            let (state, llm_actor, status_actor, llm_config_to_load) = runtime.block_on(async {
                 // 初始化数据库
                 let db = Database::new(&app_dir.join("data.db").to_string_lossy())
                     .await
@@ -1576,11 +1576,9 @@ pub fn run() {
                     .expect("无法创建 HTTP 客户端");
 
                 // 初始化LLM管理器（使用Actor模式，无需外层锁）
+                // 注意：Actor 不在此处启动，而是在后台任务的运行时中启动
                 let llm_manager = LLMManager::new(http_client.clone());
                 let (llm_actor, llm_handle) = actors::LLMManagerActor::new(llm_manager);
-
-                // 启动LLM Manager Actor
-                tokio::spawn(llm_actor.run());
 
                 // 初始化存储清理器
                 let cleaner = Arc::new(StorageCleaner::new(
@@ -1598,22 +1596,16 @@ pub fn run() {
                     info!("已加载截屏配置: {:?}", capture_settings);
                 }
 
-                // 从配置加载LLM设置
-                if let Some(llm_config) = initial_config.llm_config.clone() {
-                    let qwen_config = llm::QwenConfig {
+                // 保存 LLM 配置（在 Actor 启动后再配置）
+                let llm_config_to_load = initial_config.llm_config.clone().map(|llm_config| {
+                    llm::QwenConfig {
                         api_key: llm_config.api_key,
                         model: llm_config.model,
                         base_url: llm_config.base_url,
                         use_video_mode: llm_config.use_video_mode,
                         video_path: None,
-                    };
-
-                    if let Err(e) = llm_handle.configure(qwen_config).await {
-                        error!("加载LLM配置失败: {}", e);
-                    } else {
-                        info!("已从配置文件加载LLM设置");
                     }
-                }
+                });
 
                 if let Err(e) = cleaner
                     .set_retention_days(initial_config.retention_days)
@@ -1636,10 +1628,8 @@ pub fn run() {
                 let scheduler = Arc::new(scheduler_inner);
 
                 // 初始化系统状态（使用Actor模式，无需锁）
+                // 注意：Actor 不在此处启动，而是在后台任务的运行时中启动
                 let (status_actor, status_handle) = actors::SystemStatusActor::new();
-
-                // 启动System Status Actor
-                tokio::spawn(status_actor.run());
 
                 // 从配置中读取日志设置并应用
                 let initial_logger_settings = initial_config.logger_settings.unwrap_or_default();
@@ -1682,13 +1672,16 @@ pub fn run() {
 
                 info!("领域管理器已初始化完成");
 
-                AppState {
+                let app_state = AppState {
                     capture_domain,
                     analysis_domain,
                     storage_domain,
                     system_domain,
                     event_bus,
-                }
+                };
+
+                // 返回 AppState、两个 Actor 和 LLM 配置（将在后台任务中启动和配置）
+                (app_state, llm_actor, status_actor, llm_config_to_load)
             });
 
             // 启动后台任务
@@ -1700,9 +1693,20 @@ pub fn run() {
                     rt.block_on(async {
                         info!("启动后台任务...");
 
-                        // 程序启动时，先处理历史图片
-                        info!("开始处理历史图片，生成视频...");
-                        process_historical_frames(&state_clone).await;
+                        // 启动 Actor（在这个长期运行的运行时中）
+                        info!("启动 LLM Manager Actor 和 System Status Actor...");
+                        tokio::spawn(llm_actor.run());
+                        tokio::spawn(status_actor.run());
+                        info!("Actors 已启动");
+
+                        // 配置 LLM（Actor 启动后才能配置）
+                        if let Some(qwen_config) = llm_config_to_load {
+                            if let Err(e) = state_clone.analysis_domain.get_llm_handle().configure(qwen_config).await {
+                                error!("加载LLM配置失败: {}", e);
+                            } else {
+                                info!("已从配置文件加载LLM设置");
+                            }
+                        }
 
                         // 创建LLMProcessor并启动事件监听器
                         let llm_processor = Arc::new(llm::LLMProcessor::with_video_processor(
@@ -1760,6 +1764,15 @@ pub fn run() {
                         state_clone.system_domain.get_status_handle().set_capturing(true).await;
 
                         info!("所有后台任务已启动");
+
+                        // 在独立的后台任务中处理历史图片（不阻塞启动）
+                        {
+                            let history_state = state_clone.clone();
+                            tokio::spawn(async move {
+                                info!("开始处理历史图片，生成视频...");
+                                process_historical_frames(&history_state).await;
+                            });
+                        }
 
                         // 保持运行时活跃
                         loop {

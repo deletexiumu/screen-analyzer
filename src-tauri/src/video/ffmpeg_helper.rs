@@ -1,7 +1,7 @@
 // FFmpeg辅助模块 - 管理内置的FFmpeg可执行文件
 
 use anyhow::{anyhow, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 /// 获取FFmpeg可执行文件的路径

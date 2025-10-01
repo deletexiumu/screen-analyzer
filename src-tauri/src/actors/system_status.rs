@@ -42,6 +42,11 @@ pub enum SystemStatusCommand {
     Get {
         reply: oneshot::Sender<SystemStatus>,
     },
+
+    /// 健康检查（Ping）
+    HealthCheck {
+        reply: oneshot::Sender<()>,
+    },
 }
 
 /// 系统状态Actor
@@ -101,6 +106,11 @@ impl SystemStatusActor {
                 SystemStatusCommand::Get { reply } => {
                     let _ = reply.send(self.status.clone());
                 }
+
+                SystemStatusCommand::HealthCheck { reply } => {
+                    // 立即响应，表明Actor正常运行
+                    let _ = reply.send(());
+                }
             }
         }
 
@@ -150,5 +160,42 @@ impl SystemStatusHandle {
         let (reply, rx) = oneshot::channel();
         self.sender.send(SystemStatusCommand::Get { reply }).await.ok();
         rx.await.unwrap_or_default()
+    }
+
+    /// 健康检查 - 测试Actor是否响应
+    ///
+    /// 返回true表示Actor正常运行，false表示Actor无响应或已停止
+    /// 超时时间为5秒
+    pub async fn health_check(&self) -> bool {
+        let (reply, rx) = oneshot::channel();
+
+        // 尝试发送健康检查命令
+        if self.sender
+            .send(SystemStatusCommand::HealthCheck { reply })
+            .await
+            .is_err()
+        {
+            tracing::warn!("System Status Actor 健康检查失败: 通道已关闭");
+            return false;
+        }
+
+        // 等待响应，超时5秒
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            rx
+        ).await {
+            Ok(Ok(())) => {
+                tracing::debug!("System Status Actor 健康检查成功");
+                true
+            }
+            Ok(Err(_)) => {
+                tracing::warn!("System Status Actor 健康检查失败: Actor已停止");
+                false
+            }
+            Err(_) => {
+                tracing::warn!("System Status Actor 健康检查失败: 超时(5秒)");
+                false
+            }
+        }
     }
 }
