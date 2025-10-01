@@ -3,6 +3,7 @@
 // 声明模块
 pub mod capture;
 pub mod domains;
+pub mod event_bus;
 pub mod llm;
 pub mod logger;
 pub mod models;
@@ -19,6 +20,7 @@ use tracing::{debug, error, info, trace, warn};
 // 导入必要的类型
 use capture::{scheduler::CaptureScheduler, ScreenCapture};
 use domains::{AnalysisDomain, CaptureDomain, StorageDomain, SystemDomain};
+use event_bus::EventBus;
 use llm::{LLMManager, LLMProcessor};
 use models::*;
 use settings::SettingsManager;
@@ -36,6 +38,7 @@ const FRAME_SAMPLE_INTERVAL_SECONDS: u32 = 5;
 /// - 分析领域：负责LLM分析和视频处理
 /// - 存储领域：负责数据库、存储清理和设置管理
 /// - 系统领域：负责系统状态、日志和基础设施
+/// - 事件总线：用于领域间解耦通信
 #[derive(Clone)]
 pub struct AppState {
     /// 捕获领域管理器
@@ -46,6 +49,8 @@ pub struct AppState {
     pub storage_domain: Arc<StorageDomain>,
     /// 系统领域管理器
     pub system_domain: Arc<SystemDomain>,
+    /// 事件总线
+    pub event_bus: Arc<EventBus>,
 }
 
 /// 文件夹类型枚举（用于安全的路径访问）
@@ -1671,6 +1676,9 @@ pub fn run() {
                     http_client,
                 ));
 
+                // 创建事件总线（容量1000,足够缓冲）
+                let event_bus = Arc::new(EventBus::new(1000));
+
                 info!("领域管理器已初始化完成");
 
                 AppState {
@@ -1678,6 +1686,7 @@ pub fn run() {
                     analysis_domain,
                     storage_domain,
                     system_domain,
+                    event_bus,
                 }
             });
 
