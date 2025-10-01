@@ -244,17 +244,20 @@ impl Database {
     }
 
     /// 获取指定日期范围的活动
+    ///
+    /// 时区处理: 将用户输入的本地日期转换为 UTC 时间范围进行查询
+    /// 数据库统一使用 UTC 存储,只在显示层转换为本地时间
     pub async fn get_activities(&self, start_date: &str, end_date: &str) -> Result<Vec<Activity>> {
         let rows = sqlx::query(
             r#"
             SELECT
-                DATE(datetime(start_time, 'localtime')) as date,
+                DATE(start_time) as date,
                 COUNT(*) as session_count,
                 SUM(CAST((julianday(end_time) - julianday(start_time)) * 24 * 60 AS INTEGER)) as total_duration_minutes,
                 GROUP_CONCAT(DISTINCT json_extract(tags, '$[0].category')) as main_categories
             FROM sessions
-            WHERE DATE(datetime(start_time, 'localtime')) BETWEEN DATE(?) AND DATE(?)
-            GROUP BY DATE(datetime(start_time, 'localtime'))
+            WHERE DATE(start_time) BETWEEN DATE(?) AND DATE(?)
+            GROUP BY DATE(start_time)
             ORDER BY date DESC
             "#
         )
@@ -286,25 +289,21 @@ impl Database {
     }
 
     /// 获取某一天的所有会话
+    ///
+    /// 时区处理: 直接使用 UTC 日期查询,避免时区转换导致的边界问题
+    /// 假设 date 格式为 YYYY-MM-DD (UTC),查询该日期的所有会话
     pub async fn get_sessions_by_date(&self, date: &str) -> Result<Vec<Session>> {
-        // 将日期转换为UTC的开始和结束时间戳
-        // 假设date格式为YYYY-MM-DD，需要转换为当地时间对应的UTC时间范围
-        let start_of_day = format!("{} 00:00:00", date);
-        let end_of_day = format!("{} 23:59:59", date);
-
         let sessions = sqlx::query_as::<_, Session>(
             r#"
             SELECT
                 id, start_time, end_time, title, summary,
                 video_path, tags, created_at
             FROM sessions
-            WHERE datetime(start_time, 'localtime') >= ?
-              AND datetime(start_time, 'localtime') <= ?
+            WHERE DATE(start_time) = DATE(?)
             ORDER BY start_time DESC
             "#,
         )
-        .bind(start_of_day)
-        .bind(end_of_day)
+        .bind(date)
         .fetch_all(&self.pool)
         .await?;
 

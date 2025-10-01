@@ -34,12 +34,12 @@ pub struct QwenProvider {
 }
 
 impl QwenProvider {
-    /// 创建新的Qwen提供商
-    pub fn new() -> Self {
+    /// 创建新的Qwen提供商（接受共享的HTTP客户端以复用连接池）
+    pub fn new(client: Client) -> Self {
         Self {
             api_key: None,
             model: "qwen-vl-max-latest".to_string(), // 默认使用最新的视觉语言模型
-            client: Client::new(),
+            client,
             base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
                 .to_string(),
             upload_url: "https://dashscope.aliyuncs.com/api/v1/uploads".to_string(), // 新增上传URL

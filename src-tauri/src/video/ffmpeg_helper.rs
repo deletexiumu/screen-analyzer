@@ -86,7 +86,7 @@ fn get_bundled_ffmpeg_path() -> Result<PathBuf> {
         return Err(anyhow!("不支持的操作系统"));
     };
 
-    // 在Unix系统上，确保可执行权限
+    // 在Unix系统上，确保可执行权限（限制为所有者和组，避免过于宽松）
     #[cfg(unix)]
     {
         use std::fs;
@@ -95,7 +95,7 @@ fn get_bundled_ffmpeg_path() -> Result<PathBuf> {
         if ffmpeg_path.exists() {
             let metadata = fs::metadata(&ffmpeg_path)?;
             let mut permissions = metadata.permissions();
-            permissions.set_mode(0o755);
+            permissions.set_mode(0o750); // 仅所有者和组可执行，其他用户无权限
             fs::set_permissions(&ffmpeg_path, permissions)?;
         }
     }

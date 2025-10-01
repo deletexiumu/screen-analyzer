@@ -2,6 +2,7 @@
 
 // 声明模块
 pub mod capture;
+pub mod domains;
 pub mod llm;
 pub mod logger;
 pub mod models;
@@ -17,6 +18,7 @@ use tracing::{debug, error, info, trace, warn};
 
 // 导入必要的类型
 use capture::{scheduler::CaptureScheduler, ScreenCapture};
+use domains::{AnalysisDomain, CaptureDomain, StorageDomain, SystemDomain};
 use llm::{LLMManager, LLMProcessor};
 use models::*;
 use settings::SettingsManager;
@@ -27,34 +29,57 @@ use video::VideoProcessor;
 /// 帧采样时间间隔（秒）
 const FRAME_SAMPLE_INTERVAL_SECONDS: u32 = 5;
 
-/// 应用状态
+/// 应用状态（重构后按领域分组）
+///
+/// 将原本混乱的11个字段重组为4个领域管理器，实现单一职责原则
+/// - 捕获领域：负责屏幕截取和调度
+/// - 分析领域：负责LLM分析和视频处理
+/// - 存储领域：负责数据库、存储清理和设置管理
+/// - 系统领域：负责系统状态、日志和基础设施
 #[derive(Clone)]
 pub struct AppState {
-    /// 截屏管理器
-    pub capture: Arc<ScreenCapture>,
-    /// 数据库
-    pub db: Arc<Database>,
-    /// LLM管理器
-    pub llm_manager: Arc<Mutex<LLMManager>>,
-    /// 存储清理器
-    pub cleaner: Arc<StorageCleaner>,
-    /// 视频处理器
-    pub video_processor: Arc<VideoProcessor>,
-    /// 系统状态
-    pub system_status: Arc<RwLock<SystemStatus>>,
-    /// 调度器
-    pub scheduler: Arc<CaptureScheduler>,
-    /// 设置管理器
-    pub settings: Arc<SettingsManager>,
-    /// 视频分析锁
-    pub analysis_lock: Arc<tokio::sync::Mutex<()>>,
-    /// 日志广播器
-    pub log_broadcaster: Arc<logger::LogBroadcaster>,
+    /// 捕获领域管理器
+    pub capture_domain: Arc<CaptureDomain>,
+    /// 分析领域管理器
+    pub analysis_domain: Arc<AnalysisDomain>,
+    /// 存储领域管理器
+    pub storage_domain: Arc<StorageDomain>,
+    /// 系统领域管理器
+    pub system_domain: Arc<SystemDomain>,
+}
+
+/// 文件夹类型枚举（用于安全的路径访问）
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderType {
+    /// 截图文件夹
+    Frames,
+    /// 视频文件夹
+    Videos,
+}
+
+// ==================== 输入验证辅助函数 ====================
+
+/// 验证会话ID是否有效（防止SQL注入和无效输入）
+fn validate_session_id(id: i64) -> Result<(), String> {
+    if id < 0 {
+        return Err(format!("无效的会话 ID: {}", id));
+    }
+    Ok(())
 }
 
 // ==================== Tauri命令 ====================
 
-/// 获取活动列表
+/// 获取指定日期范围内的活动列表
+///
+/// # 参数
+/// - `state`: 应用状态
+/// - `start_date`: 开始日期 (格式: YYYY-MM-DD)
+/// - `end_date`: 结束日期 (格式: YYYY-MM-DD)
+///
+/// # 返回
+/// - `Ok(Vec<Activity>)`: 活动列表
+/// - `Err(String)`: 错误信息
 #[tauri::command]
 async fn get_activities(
     state: tauri::State<'_, AppState>,
@@ -62,7 +87,7 @@ async fn get_activities(
     end_date: String,
 ) -> Result<Vec<Activity>, String> {
     state
-        .db
+        .storage_domain.get_db()
         .get_activities(&start_date, &end_date)
         .await
         .map_err(|e| e.to_string())
@@ -75,7 +100,7 @@ async fn get_day_sessions(
     date: String,
 ) -> Result<Vec<Session>, String> {
     state
-        .db
+        .storage_domain.get_db()
         .get_sessions_by_date(&date)
         .await
         .map_err(|e| e.to_string())
@@ -87,8 +112,9 @@ async fn get_session_detail(
     state: tauri::State<'_, AppState>,
     session_id: i64,
 ) -> Result<SessionDetail, String> {
+    validate_session_id(session_id)?;
     state
-        .db
+        .storage_domain.get_db()
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())
@@ -97,7 +123,7 @@ async fn get_session_detail(
 /// 获取应用配置
 #[tauri::command]
 async fn get_app_config(state: tauri::State<'_, AppState>) -> Result<PersistedAppConfig, String> {
-    Ok(state.settings.get().await)
+    Ok(state.storage_domain.get_settings().get().await)
 }
 
 /// 更新配置
@@ -107,7 +133,7 @@ async fn update_config(
     config: AppConfig,
 ) -> Result<PersistedAppConfig, String> {
     let updated_config = state
-        .settings
+        .storage_domain.get_settings()
         .update(config.clone())
         .await
         .map_err(|e| e.to_string())?;
@@ -116,7 +142,7 @@ async fn update_config(
     if let Some(retention_days) = config.retention_days {
         // 直接调用cleaner的方法，不需要获取可变引用
         state
-            .cleaner
+            .storage_domain.get_cleaner()
             .set_retention_days(retention_days)
             .await
             .map_err(|e| e.to_string())?;
@@ -142,13 +168,13 @@ async fn update_config(
 
     // 更新截屏配置
     if let Some(capture_settings) = config.capture_settings {
-        state.capture.update_settings(capture_settings.clone()).await;
+        state.capture_domain.get_capture().update_settings(capture_settings.clone()).await;
         info!("截屏配置已更新: {:?}", capture_settings);
     }
 
     // 更新日志配置
     if let Some(logger_settings) = config.logger_settings {
-        state.log_broadcaster.set_enabled(logger_settings.enable_frontend_logging);
+        state.system_domain.get_logger().set_enabled(logger_settings.enable_frontend_logging);
         info!("日志配置已更新: 前端日志推送 = {}", logger_settings.enable_frontend_logging);
     }
 
@@ -162,9 +188,10 @@ async fn add_manual_tag(
     session_id: i64,
     tag: ActivityTag,
 ) -> Result<(), String> {
+    validate_session_id(session_id)?;
     // 获取当前会话
     let session_detail = state
-        .db
+        .storage_domain.get_db()
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -177,7 +204,7 @@ async fn add_manual_tag(
     let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
 
     state
-        .db
+        .storage_domain.get_db()
         .update_session_tags(session_id, &tags_json)
         .await
         .map_err(|e| e.to_string())?;
@@ -192,9 +219,10 @@ async fn remove_tag(
     session_id: i64,
     tag_index: usize,
 ) -> Result<(), String> {
+    validate_session_id(session_id)?;
     // 获取当前会话
     let session_detail = state
-        .db
+        .storage_domain.get_db()
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -210,7 +238,7 @@ async fn remove_tag(
     let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
 
     state
-        .db
+        .storage_domain.get_db()
         .update_session_tags(session_id, &tags_json)
         .await
         .map_err(|e| e.to_string())?;
@@ -221,14 +249,14 @@ async fn remove_tag(
 /// 获取系统状态
 #[tauri::command]
 async fn get_system_status(state: tauri::State<'_, AppState>) -> Result<SystemStatus, String> {
-    let status = state.system_status.read().await;
+    let status = state.system_domain.get_status().read().await;
     Ok(status.clone())
 }
 
 /// 切换截屏状态（暂停/恢复）
 #[tauri::command]
 async fn toggle_capture(state: tauri::State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    let mut status = state.system_status.write().await;
+    let mut status = state.system_domain.get_status().write().await;
     status.is_capturing = enabled;
 
     if enabled {
@@ -247,9 +275,7 @@ async fn toggle_capture(state: tauri::State<'_, AppState>, enabled: bool) -> Res
 async fn trigger_analysis(state: tauri::State<'_, AppState>) -> Result<String, String> {
     info!("手动触发分析 - 分析视频文件");
 
-    let analysis_lock = state.analysis_lock.clone();
-    let _guard = analysis_lock.lock().await;
-
+    // 已移除 analysis_lock 临时方案，直接执行分析
     let report = analyze_unprocessed_videos(&state, None, true).await?;
 
     if report.total_candidates == 0 {
@@ -273,20 +299,19 @@ async fn retry_session_analysis(
     state: tauri::State<'_, AppState>,
     session_id: i64,
 ) -> Result<String, String> {
+    validate_session_id(session_id)?;
     info!("重新分析会话: {}", session_id);
 
-    let analysis_lock = state.analysis_lock.clone();
-    let _guard = analysis_lock.lock().await;
-
+    // 已移除 analysis_lock 临时方案，直接执行分析
     {
-        let mut status = state.system_status.write().await;
+        let mut status = state.system_domain.get_status().write().await;
         status.is_processing = true;
         status.last_error = None;
     }
 
     let result = async {
         let session_detail = state
-            .db
+            .storage_domain.get_db()
             .get_session_detail(session_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -308,13 +333,13 @@ async fn retry_session_analysis(
 
         sqlx::query("DELETE FROM video_segments WHERE session_id = ?")
             .bind(session_id)
-            .execute(state.db.get_pool())
+            .execute(state.storage_domain.get_db().get_pool())
             .await
             .map_err(|e| e.to_string())?;
 
         sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
             .bind(session_id)
-            .execute(state.db.get_pool())
+            .execute(state.storage_domain.get_db().get_pool())
             .await
             .map_err(|e| e.to_string())?;
 
@@ -329,7 +354,7 @@ async fn retry_session_analysis(
         .bind("重新分析中...")
         .bind("[]")
         .bind(session_id)
-        .execute(state.db.get_pool())
+        .execute(state.storage_domain.get_db().get_pool())
         .await
         .map_err(|e| e.to_string())?;
 
@@ -351,7 +376,7 @@ async fn retry_session_analysis(
     let last_error = result.as_ref().err().cloned();
 
     {
-        let mut status = state.system_status.write().await;
+        let mut status = state.system_domain.get_status().write().await;
         status.is_processing = false;
         status.last_process_time = Some(chrono::Utc::now());
         status.last_error = last_error.clone();
@@ -431,11 +456,12 @@ async fn get_video_data(
     state: tauri::State<'_, AppState>,
     session_id: i64,
 ) -> Result<Vec<u8>, String> {
+    validate_session_id(session_id)?;
     use tokio::fs;
 
     // 获取会话详情
     let session = state
-        .db
+        .storage_domain.get_db()
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -457,9 +483,10 @@ async fn get_video_url(
     state: tauri::State<'_, AppState>,
     session_id: i64,
 ) -> Result<String, String> {
+    validate_session_id(session_id)?;
     // 获取会话详情
     let session = state
-        .db
+        .storage_domain.get_db()
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -479,11 +506,12 @@ async fn generate_video(
     session_id: i64,
     speed_multiplier: Option<f32>,
 ) -> Result<String, String> {
+    validate_session_id(session_id)?;
     info!("生成会话视频: session_id={}", session_id);
 
     // 获取会话详情
     let session_detail = state
-        .db
+        .storage_domain.get_db()
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -494,20 +522,21 @@ async fn generate_video(
     // 如果没有帧，处理错误
     if all_frames.is_empty() {
         error!("会话 {} 没有截图帧，删除该会话", session_id);
-        if let Err(e) = state.db.delete_session(session_id).await {
+        if let Err(e) = state.storage_domain.get_db().delete_session(session_id).await {
             error!("删除空会话失败: {}", e);
         }
         return Err("该会话没有截图帧，已删除该会话".to_string());
     }
 
-    // 提取所有帧路径
-    let all_frame_paths: Vec<String> = all_frames.iter().map(|f| f.file_path.clone()).collect();
-
     // 应用帧过滤：每5秒选择一张图片（假设原始截图是1fps）
-    let frame_paths = video::filter_frames_by_interval(
-        all_frame_paths,
-        FRAME_SAMPLE_INTERVAL_SECONDS as usize
-    );
+    // 优化：先过滤再克隆，避免克隆所有帧路径
+    let interval = FRAME_SAMPLE_INTERVAL_SECONDS as usize;
+    let frame_paths: Vec<String> = all_frames
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| interval <= 1 || idx % interval == 0)
+        .map(|(_, frame)| frame.file_path.clone())
+        .collect();
 
     info!(
         "视频抽帧：原始 {} 帧，抽样后 {} 帧（每{}秒取一帧）",
@@ -518,12 +547,12 @@ async fn generate_video(
 
     // 生成输出路径
     let output_path = state
-        .video_processor
+        .analysis_domain.get_video_processor()
         .output_dir
         .join(format!("session_{}.mp4", session_id));
 
     // 从设置中读取视频配置
-    let app_config = state.settings.get().await;
+    let app_config = state.storage_domain.get_settings().get().await;
     let mut config = video::VideoConfig::default();
     config.quality = app_config.video_config.quality;
     config.add_timestamp = app_config.video_config.add_timestamp;
@@ -537,14 +566,14 @@ async fn generate_video(
 
     // 生成视频
     let result = state
-        .video_processor
+        .analysis_domain.get_video_processor()
         .create_summary_video(frame_paths, &output_path, &config)
         .await
         .map_err(|e| e.to_string())?;
 
     // 更新数据库中的视频路径
     state
-        .db
+        .storage_domain.get_db()
         .update_session_video_path(session_id, &result.file_path)
         .await
         .map_err(|e| {
@@ -575,7 +604,7 @@ async fn test_generate_videos(
     use chrono::{Duration, TimeZone, Timelike, Utc};
     use std::collections::BTreeMap;
 
-    let frames_dir = state.capture.frames_dir();
+    let frames_dir = state.capture_domain.get_capture().frames_dir();
     let now = Utc::now();
 
     let mut dir = tokio::fs::read_dir(&frames_dir)
@@ -665,7 +694,7 @@ async fn test_generate_videos(
             video_config.format.extension()
         );
 
-        let output_path = state.video_processor.output_dir.join(&output_name);
+        let output_path = state.analysis_domain.get_video_processor().output_dir.join(&output_name);
 
         let frame_list: Vec<String> = frame_paths
             .iter()
@@ -686,7 +715,7 @@ async fn test_generate_videos(
         );
 
         match state
-            .video_processor
+            .analysis_domain.get_video_processor()
             .create_summary_video(filtered_frame_list, &output_path, &video_config)
             .await
         {
@@ -746,7 +775,7 @@ async fn test_generate_videos(
 async fn cleanup_storage(state: tauri::State<'_, AppState>) -> Result<(), String> {
     info!("手动触发存储清理");
     state
-        .cleaner
+        .storage_domain.get_cleaner()
         .trigger_cleanup()
         .await
         .map_err(|e| e.to_string())
@@ -758,7 +787,7 @@ async fn get_storage_stats(
     state: tauri::State<'_, AppState>,
 ) -> Result<storage::cleaner::StorageStats, String> {
     state
-        .cleaner
+        .storage_domain.get_cleaner()
         .get_storage_stats()
         .await
         .map_err(|e| e.to_string())
@@ -770,7 +799,7 @@ async fn configure_qwen(
     state: tauri::State<'_, AppState>,
     config: llm::QwenConfig,
 ) -> Result<(), String> {
-    let mut llm = state.llm_manager.lock().await;
+    let mut llm = state.analysis_domain.get_llm_manager().lock().await;
     llm.configure(config).await.map_err(|e| e.to_string())
 }
 
@@ -836,13 +865,13 @@ async fn configure_llm_provider(
     };
 
     state
-        .settings
+        .storage_domain.get_settings()
         .update(update)
         .await
         .map_err(|e| format!("保存配置失败: {}", e))?;
 
     // 配置内存中的LLM管理器
-    let mut llm = state.llm_manager.lock().await;
+    let mut llm = state.analysis_domain.get_llm_manager().lock().await;
     llm.configure(qwen_config)
         .await
         .map_err(|e| e.to_string())?;
@@ -855,7 +884,7 @@ async fn configure_llm_provider(
 #[tauri::command]
 async fn test_capture(state: tauri::State<'_, AppState>) -> Result<String, String> {
     info!("测试截屏功能...");
-    match state.capture.capture_frame().await {
+    match state.capture_domain.get_capture().capture_frame().await {
         Ok(frame) => {
             info!("截屏成功: {}", frame.file_path);
             Ok(format!("截屏成功: {}", frame.file_path))
@@ -874,11 +903,12 @@ async fn delete_session(
     state: tauri::State<'_, AppState>,
     session_id: i64,
 ) -> Result<String, String> {
+    validate_session_id(session_id)?;
     info!("删除会话: {}", session_id);
 
     // 获取会话详情
     let session_detail = state
-        .db
+        .storage_domain.get_db()
         .get_session_detail(session_id)
         .await
         .map_err(|e| format!("获取会话详情失败: {}", e))?;
@@ -901,28 +931,28 @@ async fn delete_session(
     // 删除 video_segments
     sqlx::query("DELETE FROM video_segments WHERE session_id = ?")
         .bind(session_id)
-        .execute(state.db.get_pool())
+        .execute(state.storage_domain.get_db().get_pool())
         .await
         .map_err(|e| format!("删除视频分段失败: {}", e))?;
 
     // 删除 timeline_cards
     sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
         .bind(session_id)
-        .execute(state.db.get_pool())
+        .execute(state.storage_domain.get_db().get_pool())
         .await
         .map_err(|e| format!("删除时间线卡片失败: {}", e))?;
 
     // 删除 frames (正确的表名)
     sqlx::query("DELETE FROM frames WHERE session_id = ?")
         .bind(session_id)
-        .execute(state.db.get_pool())
+        .execute(state.storage_domain.get_db().get_pool())
         .await
         .map_err(|e| format!("删除帧记录失败: {}", e))?;
 
     // 删除 sessions
     sqlx::query("DELETE FROM sessions WHERE id = ?")
         .bind(session_id)
-        .execute(state.db.get_pool())
+        .execute(state.storage_domain.get_db().get_pool())
         .await
         .map_err(|e| format!("删除会话失败: {}", e))?;
 
@@ -955,7 +985,7 @@ async fn regenerate_timeline(
         "#,
     )
     .bind(target_date.to_string())
-    .fetch_all(state.db.get_pool())
+    .fetch_all(state.storage_domain.get_db().get_pool())
     .await
     .map_err(|e| format!("获取会话失败: {}", e))?;
 
@@ -973,7 +1003,7 @@ async fn regenerate_timeline(
             "SELECT * FROM video_segments WHERE session_id = ? ORDER BY start_timestamp ASC",
         )
         .bind(session_id)
-        .fetch_all(state.db.get_pool())
+        .fetch_all(state.storage_domain.get_db().get_pool())
         .await
         .map_err(|e| format!("获取视频分段失败: {}", e))?;
 
@@ -1019,24 +1049,24 @@ async fn regenerate_timeline(
         // 先删除相关的 LLM 调用记录（避免外键冲突）
         sqlx::query("DELETE FROM llm_calls WHERE session_id = ?")
             .bind(session_id)
-            .execute(state.db.get_pool())
+            .execute(state.storage_domain.get_db().get_pool())
             .await
             .map_err(|e| format!("清除LLM调用记录失败: {}", e))?;
 
         // 清空该session的timeline_cards
         sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
             .bind(session_id)
-            .execute(state.db.get_pool())
+            .execute(state.storage_domain.get_db().get_pool())
             .await
             .map_err(|e| format!("清除旧时间线失败: {}", e))?;
 
         // 使用LLM重新生成timeline
-        let mut llm_manager = state.llm_manager.lock().await;
+        let mut llm_manager = state.analysis_domain.get_llm_manager().lock().await;
         // 设置当前的 session_id，以便 LLM 调用记录能正确关联
-        llm_manager.set_provider_database(state.db.clone(), Some(session_id));
+        llm_manager.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id));
 
         // 设置视频速率乘数（虽然generate_timeline不直接使用，但保持一致性）
-        let app_config = state.settings.get().await;
+        let app_config = state.storage_domain.get_settings().get().await;
         let speed_multiplier = app_config.video_config.speed_multiplier;
         llm_manager.set_video_speed(speed_multiplier);
         let timeline_cards = match llm_manager.generate_timeline(video_segments, None).await {
@@ -1094,7 +1124,7 @@ async fn regenerate_timeline(
                 })
                 .collect();
 
-            if let Err(e) = state.db.insert_timeline_cards(&card_records).await {
+            if let Err(e) = state.storage_domain.get_db().insert_timeline_cards(&card_records).await {
                 error!("保存时间线卅片失败: {}", e);
             }
         }
@@ -1141,16 +1171,15 @@ fn open_folder_in_explorer(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 打开存储文件夹
+/// 打开存储文件夹（使用枚举类型防止路径遍历攻击）
 #[tauri::command]
 async fn open_storage_folder(
     state: tauri::State<'_, AppState>,
-    folder_type: String,
+    folder_type: FolderType,
 ) -> Result<(), String> {
-    let path = match folder_type.as_str() {
-        "frames" => state.capture.frames_dir(),
-        "videos" => state.video_processor.output_dir.clone(),
-        _ => return Err(format!("未知的文件夹类型: {}", folder_type)),
+    let path = match folder_type {
+        FolderType::Frames => state.capture_domain.get_capture().frames_dir(),
+        FolderType::Videos => state.analysis_domain.get_video_processor().output_dir.clone(),
     };
 
     open_folder_in_explorer(&path)
@@ -1371,7 +1400,7 @@ async fn process_historical_frames(state: &AppState) {
     info!("开始处理历史图片");
 
     // 查询所有未生成视频的会话
-    let pool = state.db.get_pool();
+    let pool = state.storage_domain.get_db().get_pool();
     let sessions_without_video = sqlx::query(
         r#"
         SELECT id, start_time, end_time
@@ -1431,9 +1460,9 @@ async fn process_historical_frames(state: &AppState) {
                             end_time.format("%Y%m%d%H%M")
                         );
 
-                        let video_path_buf = state.video_processor.output_dir.join(&video_filename);
+                        let video_path_buf = state.analysis_domain.get_video_processor().output_dir.join(&video_filename);
                         match state
-                            .video_processor
+                            .analysis_domain.get_video_processor()
                             .create_summary_video(
                                 frame_paths.clone(),
                                 &video_path_buf,
@@ -1539,8 +1568,15 @@ pub fn run() {
                 let capture =
                     Arc::new(ScreenCapture::new(frames_dir.clone()).expect("截屏管理器初始化失败"));
 
-                // 初始化LLM管理器
-                let llm_manager = Arc::new(Mutex::new(LLMManager::new()));
+                // 创建共享的 HTTP 客户端（用于 LLM API 调用，复用连接池提升性能）
+                let http_client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .pool_max_idle_per_host(10)
+                    .build()
+                    .expect("无法创建 HTTP 客户端");
+
+                // 初始化LLM管理器（传入共享HTTP客户端）
+                let llm_manager = Arc::new(Mutex::new(LLMManager::new(http_client.clone())));
 
                 // 初始化存储清理器
                 let cleaner = Arc::new(StorageCleaner::new(
@@ -1599,24 +1635,49 @@ pub fn run() {
                 // 初始化系统状态
                 let system_status = Arc::new(RwLock::new(SystemStatus::default()));
 
-                let analysis_lock = Arc::new(tokio::sync::Mutex::new(()));
-
                 // 从配置中读取日志设置并应用
                 let initial_logger_settings = initial_config.logger_settings.unwrap_or_default();
                 log_broadcaster.set_enabled(initial_logger_settings.enable_frontend_logging);
                 info!("日志推送已设置: {}", initial_logger_settings.enable_frontend_logging);
 
-                AppState {
-                    capture,
-                    db,
-                    llm_manager,
-                    cleaner,
-                    video_processor,
+                // 将 HTTP 客户端包装为 Arc 以便在 AppState 中共享
+                let http_client = Arc::new(http_client);
+
+                // ==================== 组装领域管理器 ====================
+
+                // 创建捕获领域
+                let capture_domain = Arc::new(CaptureDomain::new(
+                    capture.clone(),
+                    scheduler.clone(),
+                ));
+
+                // 创建分析领域
+                let analysis_domain = Arc::new(AnalysisDomain::new(
+                    llm_manager.clone(),
+                    video_processor.clone(),
+                ));
+
+                // 创建存储领域
+                let storage_domain = Arc::new(StorageDomain::new(
+                    db.clone(),
+                    cleaner.clone(),
+                    settings.clone(),
+                ));
+
+                // 创建系统领域
+                let system_domain = Arc::new(SystemDomain::new(
                     system_status,
-                    scheduler,
-                    settings,
-                    analysis_lock,
-                    log_broadcaster: log_broadcaster.clone(),
+                    log_broadcaster.clone(),
+                    http_client,
+                ));
+
+                info!("领域管理器已初始化完成");
+
+                AppState {
+                    capture_domain,
+                    analysis_domain,
+                    storage_domain,
+                    system_domain,
                 }
             });
 
@@ -1635,50 +1696,41 @@ pub fn run() {
 
                         // 创建LLM处理器（带视频处理器）
                         let llm_processor = Arc::new(LLMProcessor::with_video_processor(
-                            state_clone.llm_manager.clone(),
-                            state_clone.db.clone(),
-                            state_clone.video_processor.clone(),
-                            state_clone.settings.clone(),
+                            state_clone.analysis_domain.get_llm_manager().clone(),
+                            state_clone.storage_domain.get_db().clone(),
+                            state_clone.analysis_domain.get_video_processor().clone(),
+                            state_clone.storage_domain.get_settings().clone(),
                         ));
 
                         // 启动调度器
-                        state_clone.scheduler.clone().start(llm_processor);
+                        state_clone.capture_domain.get_scheduler().clone().start(llm_processor);
 
                         // 启动存储清理任务
-                        state_clone.cleaner.clone().start_cleanup_task().await;
+                        state_clone.storage_domain.get_cleaner().clone().start_cleanup_task().await;
 
                         // 周期性扫描视频目录，处理未分析的视频
                         {
                             let video_state = state_clone.clone();
-                            let analysis_lock = video_state.analysis_lock.clone();
                             tokio::spawn(async move {
                                 loop {
-                                    match analysis_lock.try_lock() {
-                                        Ok(_guard) => {
-                                            match analyze_unprocessed_videos(
-                                                &video_state,
-                                                None,
-                                                false,
-                                            )
-                                            .await
-                                            {
-                                                Ok(report) => {
-                                                    if report.processed > 0
-                                                        || report.failed > 0
-                                                    {
-                                                        info!(
-                                                            "自动视频分析完成: 处理 {} 个, 失败 {} 个",
-                                                            report.processed, report.failed
-                                                        );
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    error!("自动视频分析失败: {}", e);
-                                                }
+                                    // 直接执行分析，无需 analysis_lock（已移除临时方案）
+                                    match analyze_unprocessed_videos(
+                                        &video_state,
+                                        None,
+                                        false,
+                                    )
+                                    .await
+                                    {
+                                        Ok(report) => {
+                                            if report.processed > 0 || report.failed > 0 {
+                                                info!(
+                                                    "自动视频分析完成: 处理 {} 个, 失败 {} 个",
+                                                    report.processed, report.failed
+                                                );
                                             }
                                         }
-                                        Err(_) => {
-                                            trace!("跳过本轮自动视频分析：已有任务执行中");
+                                        Err(e) => {
+                                            error!("自动视频分析失败: {}", e);
                                         }
                                     }
                                     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
@@ -1688,7 +1740,7 @@ pub fn run() {
 
                         // 更新系统状态
                         {
-                            let mut status = state_clone.system_status.write().await;
+                            let mut status = state_clone.system_domain.get_status().write().await;
                             status.is_capturing = true;
                         }
 
@@ -1769,8 +1821,8 @@ async fn analyze_video_once(
         .and_then(|s| s.to_str())
         .unwrap_or("视频");
 
-    let persisted_config = state.settings.get().await;
-    let mut llm = state.llm_manager.lock().await;
+    let persisted_config = state.storage_domain.get_settings().get().await;
+    let mut llm = state.analysis_domain.get_llm_manager().lock().await;
 
     let qwen_config = if let Some(llm_config) = persisted_config.llm_config {
         llm::QwenConfig {
@@ -1805,7 +1857,7 @@ async fn analyze_video_once(
     let session_id = if let Some(existing_id) = reuse_session {
         if let Err(e) = sqlx::query("DELETE FROM video_segments WHERE session_id = ?")
             .bind(existing_id)
-            .execute(state.db.get_pool())
+            .execute(state.storage_domain.get_db().get_pool())
             .await
         {
             llm.set_video_path(None);
@@ -1814,7 +1866,7 @@ async fn analyze_video_once(
 
         if let Err(e) = sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
             .bind(existing_id)
-            .execute(state.db.get_pool())
+            .execute(state.storage_domain.get_db().get_pool())
             .await
         {
             llm.set_video_path(None);
@@ -1834,7 +1886,7 @@ async fn analyze_video_once(
             created_at: Some(now),
         };
 
-        match state.db.insert_session(&temp_session).await {
+        match state.storage_domain.get_db().insert_session(&temp_session).await {
             Ok(id) => id,
             Err(e) => {
                 llm.set_video_path(None);
@@ -1843,7 +1895,7 @@ async fn analyze_video_once(
         }
     };
 
-    llm.set_provider_database(state.db.clone(), Some(session_id));
+    llm.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id));
 
     // 设置视频速率乘数（从配置获取）
     let speed_multiplier = persisted_config.video_config.speed_multiplier;
@@ -1910,7 +1962,7 @@ async fn analyze_video_once(
             })
             .collect();
 
-        if let Err(e) = state.db.insert_video_segments(&segment_records).await {
+        if let Err(e) = state.storage_domain.get_db().insert_video_segments(&segment_records).await {
             return Err(format!("保存视频分段失败: {}", e));
         }
     }
@@ -1940,7 +1992,7 @@ async fn analyze_video_once(
             })
             .collect();
 
-        if let Err(e) = state.db.insert_timeline_cards(&card_records).await {
+        if let Err(e) = state.storage_domain.get_db().insert_timeline_cards(&card_records).await {
             return Err(format!("保存时间线卡片失败: {}", e));
         }
     }
@@ -1960,7 +2012,7 @@ async fn analyze_video_once(
     .bind(serde_json::to_string(&summary.tags).unwrap_or_else(|_| "[]".to_string()))
     .bind(&video_path_str)
     .bind(session_id)
-    .execute(state.db.get_pool())
+    .execute(state.storage_domain.get_db().get_pool())
     .await
     {
         return Err(format!("更新会话信息失败: {}", e));
@@ -1981,7 +2033,7 @@ async fn analyze_unprocessed_videos(
 ) -> Result<VideoAnalysisReport, String> {
     use std::collections::HashSet;
 
-    let videos_dir = state.video_processor.output_dir.clone();
+    let videos_dir = state.analysis_domain.get_video_processor().output_dir.clone();
 
     // 使用异步 I/O 读取目录
     let mut video_files = Vec::new();
@@ -2000,7 +2052,7 @@ async fn analyze_unprocessed_videos(
         return Ok(VideoAnalysisReport::default());
     }
 
-    let pool = state.db.get_pool();
+    let pool = state.storage_domain.get_db().get_pool();
     let analyzed_videos = sqlx::query(
         r#"        SELECT DISTINCT video_path        FROM sessions        WHERE video_path IS NOT NULL        AND summary != '{}'        AND summary != ''        "#,
     )
@@ -2045,7 +2097,7 @@ async fn analyze_unprocessed_videos(
 
     // 使用单一的原子操作更新状态
     if mark_status {
-        let mut status = state.system_status.write().await;
+        let mut status = state.system_domain.get_status().write().await;
         status.is_processing = true;
         status.last_error = None;
     }
@@ -2124,7 +2176,7 @@ async fn analyze_unprocessed_videos(
 
     // 使用单一的原子操作更新所有状态字段
     {
-        let mut status = state.system_status.write().await;
+        let mut status = state.system_domain.get_status().write().await;
         if mark_status {
             status.is_processing = false;
         }

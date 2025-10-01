@@ -142,6 +142,7 @@ export const useActivityStore = defineStore('activity', {
         this.systemStatus = status
       } catch (error) {
         console.error('Failed to fetch system status:', error)
+        ElMessage.error('获取系统状态失败: ' + error)
       } finally {
         this.loading.status = false
       }
@@ -172,6 +173,7 @@ export const useActivityStore = defineStore('activity', {
         }
       } catch (error) {
         console.error('Failed to fetch app config:', error)
+        ElMessage.error('获取应用配置失败: ' + error)
       }
     },
 
@@ -342,6 +344,7 @@ export const useActivityStore = defineStore('activity', {
         this.systemStatus.storage_usage = stats
       } catch (error) {
         console.error('Failed to fetch storage stats:', error)
+        ElMessage.error('获取存储统计失败: ' + error)
       }
     },
 

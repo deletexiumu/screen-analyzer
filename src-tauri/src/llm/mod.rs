@@ -83,10 +83,10 @@ impl Default for AnalysisParams {
 }
 
 impl LLMManager {
-    /// 创建新的LLM管理器
-    pub fn new() -> Self {
+    /// 创建新的LLM管理器（接受共享的HTTP客户端以复用连接池）
+    pub fn new(client: reqwest::Client) -> Self {
         Self {
-            provider: QwenProvider::new(),
+            provider: QwenProvider::new(client),
             config_lock: Arc::new(RwLock::new(LLMConfig {
                 qwen: QwenConfig {
                     api_key: String::new(),
