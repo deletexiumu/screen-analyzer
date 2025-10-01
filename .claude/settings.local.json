@@ -20,7 +20,11 @@
       "Bash(ffmpeg:*)",
       "Bash(otool:*)",
       "Bash(cargo check:*)",
-      "Read(//c/Users/sqj19/.claude/**)"
+      "Read(//c/Users/sqj19/.claude/**)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo fix:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []
