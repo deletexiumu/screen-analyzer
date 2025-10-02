@@ -734,6 +734,7 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         }
 
         // 先创建会话获取session_id（用于关联LLM调用记录）
+        let (device_name, device_type) = crate::storage::get_device_info();
         let temp_session = crate::storage::Session {
             id: None,
             start_time: window.start,
@@ -743,6 +744,8 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
             video_path: video_path.clone(), // 如果已生成视频，这里就有路径了
             tags: "[]".to_string(),
             created_at: None,
+            device_name: Some(device_name),
+            device_type: Some(device_type),
         };
 
         let session_id = self.db.insert_session(&temp_session).await?;
@@ -882,20 +885,15 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         let summary = build_session_summary(window.start, window.end, &segments, &timeline_cards);
 
         // 更新会话信息（之前已经创建了临时会话）
-        sqlx::query(
-            r#"
-            UPDATE sessions
-            SET title = ?1, summary = ?2, video_path = ?3, tags = ?4
-            WHERE id = ?5
-            "#,
-        )
-        .bind(&summary.title)
-        .bind(&summary.summary)
-        .bind(&video_path)
-        .bind(serde_json::to_string(&summary.tags)?)
-        .bind(session_id)
-        .execute(self.db.get_pool())
-        .await?;
+        self.db
+            .update_session(
+                session_id,
+                &summary.title,
+                &summary.summary,
+                video_path.as_deref(),
+                &serde_json::to_string(&summary.tags)?,
+            )
+            .await?;
 
         // 保存帧数据（如果没有生成视频则保存路径，否则路径已被删除）
         if should_persist_frames {

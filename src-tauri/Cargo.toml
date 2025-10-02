@@ -27,7 +27,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 screenshots = "0.8.10"
 image = "0.24"
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "mysql", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.11", features = ["json", "multipart"] }
 async-trait = "0.1"
@@ -39,6 +39,7 @@ cron = "0.12"  # 定时任务
 uuid = { version = "1.0", features = ["v4"] }  # 生成唯一ID
 tracing-appender = "0.2.3"
 time = { version = "0.3.44", features = ["formatting", "local-offset", "macros"] }
+whoami = "1.4"  # 获取设备信息
 
 [dev-dependencies]
 tempfile = "3.23.0"

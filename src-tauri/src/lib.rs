@@ -77,6 +77,17 @@ fn validate_session_id(id: i64) -> Result<(), String> {
 
 // ==================== Tauri命令 ====================
 
+/// 获取数据库状态
+///
+/// # 返回
+/// - 数据库初始化状态
+#[tauri::command]
+async fn get_database_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<domains::storage::DatabaseStatus, String> {
+    Ok(state.storage_domain.get_db_status().await)
+}
+
 /// 获取指定日期范围内的活动列表
 ///
 /// # 参数
@@ -93,9 +104,8 @@ async fn get_activities(
     start_date: String,
     end_date: String,
 ) -> Result<Vec<Activity>, String> {
-    state
-        .storage_domain.get_db()
-        .get_activities(&start_date, &end_date)
+    let db = state.storage_domain.get_db().await?;
+    db.get_activities(&start_date, &end_date)
         .await
         .map_err(|e| e.to_string())
 }
@@ -107,7 +117,7 @@ async fn get_day_sessions(
     date: String,
 ) -> Result<Vec<Session>, String> {
     state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_sessions_by_date(&date)
         .await
         .map_err(|e| e.to_string())
@@ -121,7 +131,7 @@ async fn get_session_detail(
 ) -> Result<SessionDetail, String> {
     validate_session_id(session_id)?;
     state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())
@@ -149,7 +159,7 @@ async fn update_config(
     if let Some(retention_days) = config.retention_days {
         // 直接调用cleaner的方法，不需要获取可变引用
         state
-            .storage_domain.get_cleaner()
+            .storage_domain.get_cleaner().await?
             .set_retention_days(retention_days)
             .await
             .map_err(|e| e.to_string())?;
@@ -198,7 +208,7 @@ async fn add_manual_tag(
     validate_session_id(session_id)?;
     // 获取当前会话
     let session_detail = state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -211,7 +221,7 @@ async fn add_manual_tag(
     let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
 
     state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .update_session_tags(session_id, &tags_json)
         .await
         .map_err(|e| e.to_string())?;
@@ -229,7 +239,7 @@ async fn remove_tag(
     validate_session_id(session_id)?;
     // 获取当前会话
     let session_detail = state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -245,7 +255,7 @@ async fn remove_tag(
     let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
 
     state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .update_session_tags(session_id, &tags_json)
         .await
         .map_err(|e| e.to_string())?;
@@ -314,7 +324,7 @@ async fn retry_session_analysis(
 
     let result = async {
         let session_detail = state
-            .storage_domain.get_db()
+            .storage_domain.get_db().await?
             .get_session_detail(session_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -334,32 +344,21 @@ async fn retry_session_analysis(
             1
         };
 
-        sqlx::query("DELETE FROM video_segments WHERE session_id = ?")
-            .bind(session_id)
-            .execute(state.storage_domain.get_db().get_pool())
+        // 使用 Database 方法删除和更新
+        state.storage_domain.get_db().await?
+            .delete_video_segments_by_session(session_id)
             .await
             .map_err(|e| e.to_string())?;
 
-        sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
-            .bind(session_id)
-            .execute(state.storage_domain.get_db().get_pool())
+        state.storage_domain.get_db().await?
+            .delete_timeline_cards_by_session(session_id)
             .await
             .map_err(|e| e.to_string())?;
 
-        sqlx::query(
-            r#"
-            UPDATE sessions
-            SET title = ?1, summary = ?2, tags = ?3
-            WHERE id = ?4
-            "#,
-        )
-        .bind(&session_detail.session.title)
-        .bind("重新分析中...")
-        .bind("[]")
-        .bind(session_id)
-        .execute(state.storage_domain.get_db().get_pool())
-        .await
-        .map_err(|e| e.to_string())?;
+        state.storage_domain.get_db().await?
+            .update_session(session_id, &session_detail.session.title, "重新分析中...", None, "[]")
+            .await
+            .map_err(|e| e.to_string())?;
 
         let video_path_buf = PathBuf::from(&video_path);
         let outcome = analyze_video_once(
@@ -461,7 +460,7 @@ async fn get_video_data(
 
     // 获取会话详情
     let session = state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -486,7 +485,7 @@ async fn get_video_url(
     validate_session_id(session_id)?;
     // 获取会话详情
     let session = state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -511,7 +510,7 @@ async fn generate_video(
 
     // 获取会话详情
     let session_detail = state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -522,7 +521,7 @@ async fn generate_video(
     // 如果没有帧，处理错误
     if all_frames.is_empty() {
         error!("会话 {} 没有截图帧，删除该会话", session_id);
-        if let Err(e) = state.storage_domain.get_db().delete_session(session_id).await {
+        if let Err(e) = state.storage_domain.get_db().await?.delete_session(session_id).await {
             error!("删除空会话失败: {}", e);
         }
         return Err("该会话没有截图帧，已删除该会话".to_string());
@@ -573,7 +572,7 @@ async fn generate_video(
 
     // 更新数据库中的视频路径
     state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .update_session_video_path(session_id, &result.file_path)
         .await
         .map_err(|e| {
@@ -775,7 +774,7 @@ async fn test_generate_videos(
 async fn cleanup_storage(state: tauri::State<'_, AppState>) -> Result<(), String> {
     info!("手动触发存储清理");
     state
-        .storage_domain.get_cleaner()
+        .storage_domain.get_cleaner().await?
         .trigger_cleanup()
         .await
         .map_err(|e| e.to_string())
@@ -787,10 +786,59 @@ async fn get_storage_stats(
     state: tauri::State<'_, AppState>,
 ) -> Result<storage::cleaner::StorageStats, String> {
     state
-        .storage_domain.get_cleaner()
+        .storage_domain.get_cleaner().await?
         .get_storage_stats()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 刷新历史数据的设备信息
+#[tauri::command]
+async fn refresh_device_info(state: tauri::State<'_, AppState>) -> Result<u64, String> {
+    info!("刷新历史数据的设备信息");
+    state
+        .storage_domain
+        .get_db()
+        .await?
+        .update_device_info_for_all_sessions()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 同步 SQLite 数据到 MariaDB
+#[tauri::command]
+async fn sync_data_to_mariadb(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    info!("开始同步数据到 MariaDB");
+
+    // 检查当前是否为 MariaDB 模式
+    if !state.storage_domain.get_db().await?.is_mariadb() {
+        return Err("当前不是 MariaDB 模式，无法同步数据".to_string());
+    }
+
+    // 获取 SQLite 数据库路径
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取应用目录失败: {}", e))?;
+    let sqlite_db_path = app_dir.join("data.db");
+
+    if !sqlite_db_path.exists() {
+        return Err("本地 SQLite 数据库不存在".to_string());
+    }
+
+    // 执行同步
+    state
+        .storage_domain
+        .get_db()
+        .await?
+        .sync_from_sqlite_to_mariadb(&sqlite_db_path.to_string_lossy())
+        .await
+        .map_err(|e| format!("同步数据失败: {}", e))?;
+
+    Ok("数据同步成功".to_string())
 }
 
 /// 配置Qwen
@@ -861,6 +909,7 @@ async fn configure_llm_provider(
         ui_settings: None,
         llm_config: Some(llm_provider_config),
         logger_settings: None,
+        database_config: None,
     };
 
     state
@@ -906,7 +955,7 @@ async fn delete_session(
 
     // 获取会话详情
     let session_detail = state
-        .storage_domain.get_db()
+        .storage_domain.get_db().await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| format!("获取会话详情失败: {}", e))?;
@@ -925,32 +974,9 @@ async fn delete_session(
         }
     }
 
-    // 删除数据库记录
-    // 删除 video_segments
-    sqlx::query("DELETE FROM video_segments WHERE session_id = ?")
-        .bind(session_id)
-        .execute(state.storage_domain.get_db().get_pool())
-        .await
-        .map_err(|e| format!("删除视频分段失败: {}", e))?;
-
-    // 删除 timeline_cards
-    sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
-        .bind(session_id)
-        .execute(state.storage_domain.get_db().get_pool())
-        .await
-        .map_err(|e| format!("删除时间线卡片失败: {}", e))?;
-
-    // 删除 frames (正确的表名)
-    sqlx::query("DELETE FROM frames WHERE session_id = ?")
-        .bind(session_id)
-        .execute(state.storage_domain.get_db().get_pool())
-        .await
-        .map_err(|e| format!("删除帧记录失败: {}", e))?;
-
-    // 删除 sessions
-    sqlx::query("DELETE FROM sessions WHERE id = ?")
-        .bind(session_id)
-        .execute(state.storage_domain.get_db().get_pool())
+    // 删除数据库记录 - 使用 Database 提供的方法
+    state.storage_domain.get_db().await?
+        .delete_session(session_id)
         .await
         .map_err(|e| format!("删除会话失败: {}", e))?;
 
@@ -963,6 +989,11 @@ async fn regenerate_timeline(
     state: tauri::State<'_, AppState>,
     date: Option<String>, // 日期格式: YYYY-MM-DD，不提供则为当天
 ) -> Result<String, String> {
+    // 仅在 SQLite 模式下支持
+    if !state.storage_domain.get_db().await?.is_sqlite() {
+        return Err("重新生成timeline功能仅在 SQLite 模式下支持".to_string());
+    }
+
     info!("重新生成timeline: date={:?}", date);
 
     // 获取目标日期
@@ -974,18 +1005,11 @@ async fn regenerate_timeline(
     };
 
     // 获取当天的所有sessions
-    let sessions = sqlx::query_as::<_, (i64, String, String)>(
-        r#"
-        SELECT id, start_time, end_time
-        FROM sessions
-        WHERE DATE(start_time) = DATE(?)
-        ORDER BY start_time ASC
-        "#,
-    )
-    .bind(target_date.to_string())
-    .fetch_all(state.storage_domain.get_db().get_pool())
-    .await
-    .map_err(|e| format!("获取会话失败: {}", e))?;
+    let db = state.storage_domain.get_db().await?;
+    let sessions = db
+        .get_sessions_by_date(&target_date.to_string())
+        .await
+        .map_err(|e| format!("获取会话失败: {}", e))?;
 
     if sessions.is_empty() {
         return Ok("当天没有会话记录".to_string());
@@ -995,29 +1019,25 @@ async fn regenerate_timeline(
     let mut total_cards = 0;
 
     // 处理每个session
-    for (session_id, start_time_str, end_time_str) in sessions {
+    for session in sessions {
+        let session_id = match session.id {
+            Some(id) => id,
+            None => continue,
+        };
+        let session_start = session.start_time;
+        let session_end = session.end_time;
+
         // 获取该session的所有video_segments
-        let segments = sqlx::query_as::<_, storage::VideoSegmentRecord>(
-            "SELECT * FROM video_segments WHERE session_id = ? ORDER BY start_timestamp ASC",
-        )
-        .bind(session_id)
-        .fetch_all(state.storage_domain.get_db().get_pool())
-        .await
-        .map_err(|e| format!("获取视频分段失败: {}", e))?;
+        let segments = db
+            .get_video_segments_by_session(session_id)
+            .await
+            .map_err(|e| format!("获取视频分段失败: {}", e))?;
 
         if segments.is_empty() {
             continue;
         }
 
         total_segments += segments.len();
-
-        // 解析session的时间范围
-        let session_start = chrono::DateTime::parse_from_rfc3339(&start_time_str)
-            .map_err(|e| format!("解析开始时间失败: {}", e))?
-            .with_timezone(&chrono::Utc);
-        let session_end = chrono::DateTime::parse_from_rfc3339(&end_time_str)
-            .map_err(|e| format!("解析结束时间失败: {}", e))?
-            .with_timezone(&chrono::Utc);
 
         // 转换为LLM需要的格式 - 需要转换为相对时间
         let video_segments: Vec<llm::plugin::VideoSegment> = segments
@@ -1045,23 +1065,19 @@ async fn regenerate_timeline(
             .collect();
 
         // 先删除相关的 LLM 调用记录（避免外键冲突）
-        sqlx::query("DELETE FROM llm_calls WHERE session_id = ?")
-            .bind(session_id)
-            .execute(state.storage_domain.get_db().get_pool())
+        db.delete_llm_calls_by_session(session_id)
             .await
             .map_err(|e| format!("清除LLM调用记录失败: {}", e))?;
 
         // 清空该session的timeline_cards
-        sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
-            .bind(session_id)
-            .execute(state.storage_domain.get_db().get_pool())
+        db.delete_timeline_cards_by_session(session_id)
             .await
             .map_err(|e| format!("清除旧时间线失败: {}", e))?;
 
         // 使用LLM重新生成timeline
         let llm_handle = state.analysis_domain.get_llm_handle();
         // 设置当前的 session_id，以便 LLM 调用记录能正确关联
-        llm_handle.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id)).await
+        llm_handle.set_provider_database(state.storage_domain.get_db().await?.clone(), Some(session_id)).await
             .map_err(|e| format!("设置数据库失败: {}", e))?;
 
         // 设置视频速率乘数（虽然generate_timeline不直接使用，但保持一致性）
@@ -1124,7 +1140,7 @@ async fn regenerate_timeline(
                 })
                 .collect();
 
-            if let Err(e) = state.storage_domain.get_db().insert_timeline_cards(&card_records).await {
+            if let Err(e) = state.storage_domain.get_db().await?.insert_timeline_cards(&card_records).await {
                 error!("保存时间线卅片失败: {}", e);
             }
         }
@@ -1396,119 +1412,101 @@ async fn test_anthropic_text_api(config: serde_json::Value) -> Result<String, St
 // ==================== 辅助函数 ====================
 
 /// 处理历史图片，生成视频并清理
-async fn process_historical_frames(state: &AppState) {
+async fn process_historical_frames(state: &AppState) -> Result<(), String> {
+    // 仅在 SQLite 模式下处理历史图片
+    let db = state.storage_domain.get_db().await?;
+    if !db.is_sqlite() {
+        info!("跳过历史图片处理（仅 SQLite 模式支持）");
+        return Ok(());
+    }
+
     info!("开始处理历史图片");
 
-    // 查询所有未生成视频的会话
-    let pool = state.storage_domain.get_db().get_pool();
-    let sessions_without_video = sqlx::query(
-        r#"
-        SELECT id, start_time, end_time
-        FROM sessions
-        WHERE video_path IS NULL OR video_path = ''
-        ORDER BY start_time DESC
-        LIMIT 10
-        "#,
-    )
-    .fetch_all(pool)
-    .await;
+    // 查询所有会话，筛选出未生成视频的
+    let all_sessions = db.get_all_sessions().await.map_err(|e| e.to_string())?;
 
-    if let Ok(sessions) = sessions_without_video {
-        info!("找到 {} 个未生成视频的会话", sessions.len());
+    let sessions_without_video: Vec<_> = all_sessions
+        .into_iter()
+        .filter(|s| s.video_path.is_none() || s.video_path.as_ref().map_or(false, |p| p.is_empty()))
+        .take(10)
+        .collect();
 
-        for row in sessions {
-            if let (Ok(session_id), Ok(start_time), Ok(end_time)) = (
-                sqlx::Row::try_get::<i64, _>(&row, "id"),
-                sqlx::Row::try_get::<chrono::DateTime<chrono::Utc>, _>(&row, "start_time"),
-                sqlx::Row::try_get::<chrono::DateTime<chrono::Utc>, _>(&row, "end_time"),
-            ) {
-                info!("处理会话 {}: {} - {}", session_id, start_time, end_time);
+    info!("找到 {} 个未生成视频的会话", sessions_without_video.len());
 
-                // 获取该会话的所有帧
-                let frames = sqlx::query(
-                    r#"
-                    SELECT file_path
-                    FROM frames
-                    WHERE session_id = ?1
-                    ORDER BY timestamp ASC
-                    "#,
-                )
-                .bind(session_id)
-                .fetch_all(pool)
-                .await;
+    for session in sessions_without_video {
+        let session_id = match session.id {
+            Some(id) => id,
+            None => continue,
+        };
 
-                if let Ok(frame_rows) = frames {
-                    let mut frame_paths = Vec::new();
-                    for frame_row in frame_rows {
-                        if let Ok(path) = sqlx::Row::try_get::<String, _>(&frame_row, "file_path") {
-                            frame_paths.push(path);
-                        }
-                    }
+        info!("处理会话 {}: {} - {}", session_id, session.start_time, session.end_time);
 
-                    if !frame_paths.is_empty() {
+        // 获取该会话的所有帧
+        let frames = match db.get_frames_by_session(session_id).await {
+            Ok(frames) => frames,
+            Err(e) => {
+                error!("获取会话 {} 的帧失败: {}", session_id, e);
+                continue;
+            }
+        };
+
+        if !frames.is_empty() {
+            let frame_paths: Vec<String> = frames.into_iter().map(|f| f.file_path).collect();
+
+            if !frame_paths.is_empty() {
+                info!(
+                    "为会话 {} 生成视频，共 {} 帧",
+                    session_id,
+                    frame_paths.len()
+                );
+
+                // 生成视频
+                let video_config = crate::video::VideoConfig::default();
+                let video_filename = format!(
+                    "{}-{}.mp4",
+                    session.start_time.format("%Y%m%d%H%M"),
+                    session.end_time.format("%Y%m%d%H%M")
+                );
+
+                let video_path_buf = state.analysis_domain.get_video_processor().output_dir.join(&video_filename);
+                match state
+                    .analysis_domain.get_video_processor()
+                    .create_summary_video(
+                        frame_paths.clone(),
+                        &video_path_buf,
+                        &video_config,
+                    )
+                    .await
+                {
+                    Ok(video_result) => {
                         info!(
-                            "为会话 {} 生成视频，共 {} 帧",
-                            session_id,
-                            frame_paths.len()
+                            "视频生成成功: {} ({}字节, {}ms)",
+                            video_path_buf.display(),
+                            video_result.file_size,
+                            video_result.processing_time_ms
                         );
 
-                        // 生成视频
-                        let video_config = crate::video::VideoConfig::default();
-                        let video_filename = format!(
-                            "{}-{}.mp4",
-                            start_time.format("%Y%m%d%H%M"),
-                            end_time.format("%Y%m%d%H%M")
-                        );
+                        let video_path_str = video_path_buf.to_string_lossy();
+                        // 更新数据库中的视频路径
+                        if let Err(e) = db.update_session_video_path(session_id, &video_path_str).await {
+                            error!("更新会话 {} 视频路径失败: {}", session_id, e);
+                        }
 
-                        let video_path_buf = state.analysis_domain.get_video_processor().output_dir.join(&video_filename);
-                        match state
-                            .analysis_domain.get_video_processor()
-                            .create_summary_video(
-                                frame_paths.clone(),
-                                &video_path_buf,
-                                &video_config,
-                            )
-                            .await
-                        {
-                            Ok(video_result) => {
-                                info!(
-                                    "视频生成成功: {} ({}字节, {}ms)",
-                                    video_path_buf.display(),
-                                    video_result.file_size,
-                                    video_result.processing_time_ms
-                                );
-
-                                let video_path_str = video_path_buf.to_string_lossy();
-                                // 更新数据库中的视频路径
-                                let _ = sqlx::query(
-                                    r#"
-                                    UPDATE sessions
-                                    SET video_path = ?1
-                                    WHERE id = ?2
-                                    "#,
-                                )
-                                .bind(video_path_str.as_ref())
-                                .bind(session_id)
-                                .execute(pool)
-                                .await;
-
-                                // 删除已合并到视频的图片文件（使用异步 I/O）
-                                let mut deleted_count = 0;
-                                for frame_path in &frame_paths {
-                                    if std::path::Path::new(frame_path).exists() {
-                                        if let Err(e) = tokio::fs::remove_file(frame_path).await {
-                                            error!("删除图片失败 {}: {}", frame_path, e);
-                                        } else {
-                                            deleted_count += 1;
-                                        }
-                                    }
+                        // 删除已合并到视频的图片文件（使用异步 I/O）
+                        let mut deleted_count = 0;
+                        for frame_path in &frame_paths {
+                            if std::path::Path::new(frame_path).exists() {
+                                if let Err(e) = tokio::fs::remove_file(frame_path).await {
+                                    error!("删除图片失败 {}: {}", frame_path, e);
+                                } else {
+                                    deleted_count += 1;
                                 }
-                                info!("已删除 {} 个图片文件", deleted_count);
-                            }
-                            Err(e) => {
-                                error!("为会话 {} 生成视频失败: {}", session_id, e);
                             }
                         }
+                        info!("已删除 {} 个图片文件", deleted_count);
+                    }
+                    Err(e) => {
+                        error!("为会话 {} 生成视频失败: {}", session_id, e);
                     }
                 }
             }
@@ -1516,6 +1514,7 @@ async fn process_historical_frames(state: &AppState) {
     }
 
     info!("历史图片处理完成");
+    Ok(())
 }
 
 // ==================== 应用入口 ====================
@@ -1550,19 +1549,25 @@ pub fn run() {
             // 初始化运行时（仅用于初始化，不用于运行 Actor）
             let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
 
-            let (state, llm_actor, status_actor, llm_config_to_load) = runtime.block_on(async {
-                // 初始化数据库
-                let db = Database::new(&app_dir.join("data.db").to_string_lossy())
-                    .await
-                    .expect("数据库初始化失败");
-                let db = Arc::new(db);
-
-                // 初始化设置管理器
+            let (state, llm_actor, status_actor, llm_config_to_load, db_config_to_load, frames_dir_clone, videos_dir_clone) = runtime.block_on(async {
+                // 先初始化设置管理器，以便读取数据库配置
                 let settings = Arc::new(
                     SettingsManager::new(app_dir.join("config.json"))
                         .await
                         .expect("设置管理器初始化失败"),
                 );
+
+                // 读取初始配置
+                let initial_config = settings.get().await;
+
+                // 准备数据库配置（延迟初始化）
+                let db_config_to_load = if let Some(db_config) = initial_config.database_config.clone() {
+                    info!("将使用配置的数据库: {:?}", db_config);
+                    Some(db_config)
+                } else {
+                    info!("将使用默认 SQLite 数据库");
+                    None
+                };
 
                 // 初始化截屏管理器
                 let capture =
@@ -1579,16 +1584,6 @@ pub fn run() {
                 // 注意：Actor 不在此处启动，而是在后台任务的运行时中启动
                 let llm_manager = LLMManager::new(http_client.clone());
                 let (llm_actor, llm_handle) = actors::LLMManagerActor::new(llm_manager);
-
-                // 初始化存储清理器
-                let cleaner = Arc::new(StorageCleaner::new(
-                    db.clone(),
-                    frames_dir.clone(),
-                    videos_dir.clone(),
-                ));
-
-                // 读取初始配置
-                let initial_config = settings.get().await;
 
                 // 从配置加载截屏设置
                 if let Some(capture_settings) = initial_config.capture_settings.clone() {
@@ -1607,16 +1602,9 @@ pub fn run() {
                     }
                 });
 
-                if let Err(e) = cleaner
-                    .set_retention_days(initial_config.retention_days)
-                    .await
-                {
-                    error!("设置保留天数失败: {}", e);
-                }
-
                 // 初始化视频处理器
                 let video_processor = Arc::new(
-                    VideoProcessor::new(videos_dir, temp_dir).expect("视频处理器初始化失败"),
+                    VideoProcessor::new(videos_dir.clone(), temp_dir).expect("视频处理器初始化失败"),
                 );
 
                 // 初始化调度器
@@ -1653,12 +1641,8 @@ pub fn run() {
                     video_processor.clone(),
                 ));
 
-                // 创建存储领域
-                let storage_domain = Arc::new(StorageDomain::new(
-                    db.clone(),
-                    cleaner.clone(),
-                    settings.clone(),
-                ));
+                // 创建存储领域（数据库未初始化）
+                let storage_domain = Arc::new(StorageDomain::new_pending(settings.clone()));
 
                 // 创建系统领域（使用SystemStatus Handle）
                 let system_domain = Arc::new(SystemDomain::new(
@@ -1680,18 +1664,71 @@ pub fn run() {
                     event_bus,
                 };
 
-                // 返回 AppState、两个 Actor 和 LLM 配置（将在后台任务中启动和配置）
-                (app_state, llm_actor, status_actor, llm_config_to_load)
+                // 返回 AppState、两个 Actor、LLM 配置、数据库配置和目录路径
+                (
+                    app_state,
+                    llm_actor,
+                    status_actor,
+                    llm_config_to_load,
+                    db_config_to_load,
+                    frames_dir.clone(),
+                    videos_dir.clone(),
+                )
             });
 
             // 启动后台任务
             {
                 let state_clone = state.clone();
+                let app_dir_clone = app_dir.clone();
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new()
                         .expect("无法创建 Tokio 运行时，程序无法继续运行");
                     rt.block_on(async {
                         info!("启动后台任务...");
+
+                        // ========== 异步初始化数据库 ==========
+                        info!("开始异步初始化数据库...");
+                        let db_result = if let Some(db_config) = db_config_to_load {
+                            info!("使用配置的数据库: {:?}", db_config);
+                            Database::from_config(&db_config).await
+                        } else {
+                            info!("使用默认 SQLite 数据库");
+                            Database::new(&app_dir_clone.join("data.db").to_string_lossy()).await
+                        };
+
+                        match db_result {
+                            Ok(db) => {
+                                let db = Arc::new(db);
+                                info!("数据库初始化成功，类型: {}", db.db_type());
+
+                                // 设置数据库到 StorageDomain
+                                state_clone.storage_domain.set_database(db.clone()).await;
+
+                                // 初始化存储清理器
+                                let cleaner = Arc::new(StorageCleaner::new(
+                                    db.clone(),
+                                    frames_dir_clone.clone(),
+                                    videos_dir_clone.clone(),
+                                ));
+
+                                // 从配置读取保留天数
+                                let retention_days = state_clone.storage_domain.get_settings().get().await.retention_days;
+                                if let Err(e) = cleaner.set_retention_days(retention_days).await {
+                                    error!("设置保留天数失败: {}", e);
+                                }
+
+                                // 设置清理器到 StorageDomain
+                                state_clone.storage_domain.set_cleaner(cleaner).await;
+
+                                info!("数据库和存储清理器已就绪");
+                            }
+                            Err(e) => {
+                                let error_msg = format!("数据库初始化失败: {}", e);
+                                error!("{}", error_msg);
+                                state_clone.storage_domain.set_database_error(error_msg).await;
+                                // 继续运行，但数据库相关功能将不可用
+                            }
+                        }
 
                         // 启动 Actor（在这个长期运行的运行时中）
                         info!("启动 LLM Manager Actor 和 System Status Actor...");
@@ -1708,27 +1745,37 @@ pub fn run() {
                             }
                         }
 
-                        // 创建LLMProcessor并启动事件监听器
-                        let llm_processor = Arc::new(llm::LLMProcessor::with_video_processor(
-                            state_clone.analysis_domain.get_llm_handle().clone(),
-                            state_clone.storage_domain.get_db().clone(),
-                            state_clone.analysis_domain.get_video_processor().clone(),
-                            state_clone.storage_domain.get_settings().clone(),
-                        ));
+                        // 仅在数据库就绪时启动依赖数据库的组件
+                        if let Some(db) = state_clone.storage_domain.try_get_db().await {
+                            // 创建LLMProcessor并启动事件监听器
+                            let llm_processor = Arc::new(llm::LLMProcessor::with_video_processor(
+                                state_clone.analysis_domain.get_llm_handle().clone(),
+                                db.clone(),
+                                state_clone.analysis_domain.get_video_processor().clone(),
+                                state_clone.storage_domain.get_settings().clone(),
+                            ));
 
-                        // 启动LLM处理器事件监听器
-                        llm_processor.start_event_listener(
-                            state_clone.event_bus.clone(),
-                            state_clone.capture_domain.get_capture().clone(),
-                        ).await;
+                            // 启动LLM处理器事件监听器
+                            llm_processor.start_event_listener(
+                                state_clone.event_bus.clone(),
+                                state_clone.capture_domain.get_capture().clone(),
+                            ).await;
 
-                        info!("LLM处理器事件监听器已启动");
+                            info!("LLM处理器事件监听器已启动");
 
-                        // 启动调度器（事件驱动模式）
-                        state_clone.capture_domain.get_scheduler().clone().start(state_clone.event_bus.clone());
+                            // 启动调度器（事件驱动模式）
+                            state_clone.capture_domain.get_scheduler().clone().start(state_clone.event_bus.clone());
 
-                        // 启动存储清理任务
-                        state_clone.storage_domain.get_cleaner().clone().start_cleanup_task().await;
+                            // 启动存储清理任务
+                            if let Ok(cleaner) = state_clone.storage_domain.get_cleaner().await {
+                                cleaner.start_cleanup_task().await;
+                                info!("存储清理任务已启动");
+                            } else {
+                                error!("存储清理器未就绪");
+                            }
+                        } else {
+                            error!("数据库未就绪，跳过数据库相关组件的启动");
+                        }
 
                         // 周期性扫描视频目录，处理未分析的视频
                         {
@@ -1770,7 +1817,9 @@ pub fn run() {
                             let history_state = state_clone.clone();
                             tokio::spawn(async move {
                                 info!("开始处理历史图片，生成视频...");
-                                process_historical_frames(&history_state).await;
+                                if let Err(e) = process_historical_frames(&history_state).await {
+                                    error!("处理历史图片失败: {}", e);
+                                }
                             });
                         }
 
@@ -1787,6 +1836,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            get_database_status,
             get_activities,
             get_day_sessions,
             get_session_detail,
@@ -1803,6 +1853,8 @@ pub fn run() {
             test_generate_videos,
             cleanup_storage,
             get_storage_stats,
+            refresh_device_info,
+            sync_data_to_mariadb,
             configure_qwen,
             configure_llm_provider,
             test_capture,
@@ -1882,27 +1934,21 @@ async fn analyze_video_once(
     let now = Utc::now();
 
     // 准备会话
+    let db = state.storage_domain.get_db().await?;
     let session_id = if let Some(existing_id) = reuse_session {
-        if let Err(e) = sqlx::query("DELETE FROM video_segments WHERE session_id = ?")
-            .bind(existing_id)
-            .execute(state.storage_domain.get_db().get_pool())
-            .await
-        {
+        if let Err(e) = db.delete_video_segments_by_session(existing_id).await {
             let _ = llm_handle.set_video_path(None).await;
             return Err(format!("清理历史视频分段失败: {}", e));
         }
 
-        if let Err(e) = sqlx::query("DELETE FROM timeline_cards WHERE session_id = ?")
-            .bind(existing_id)
-            .execute(state.storage_domain.get_db().get_pool())
-            .await
-        {
+        if let Err(e) = db.delete_timeline_cards_by_session(existing_id).await {
             let _ = llm_handle.set_video_path(None).await;
             return Err(format!("清理历史时间线卡片失败: {}", e));
         }
 
         existing_id
     } else {
+        let (device_name, device_type) = storage::get_device_info();
         let temp_session = storage::Session {
             id: None,
             start_time: session_start,
@@ -1912,9 +1958,11 @@ async fn analyze_video_once(
             video_path: Some(video_path_str.clone()),
             tags: "[]".to_string(),
             created_at: Some(now),
+            device_name: Some(device_name),
+            device_type: Some(device_type),
         };
 
-        match state.storage_domain.get_db().insert_session(&temp_session).await {
+        match state.storage_domain.get_db().await?.insert_session(&temp_session).await {
             Ok(id) => id,
             Err(e) => {
                 let _ = llm_handle.set_video_path(None).await;
@@ -1923,7 +1971,7 @@ async fn analyze_video_once(
         }
     };
 
-    llm_handle.set_provider_database(state.storage_domain.get_db().clone(), Some(session_id)).await
+    llm_handle.set_provider_database(state.storage_domain.get_db().await?.clone(), Some(session_id)).await
         .map_err(|e| e.to_string())?;
 
     // 设置视频速率乘数（从配置获取）
@@ -1991,7 +2039,7 @@ async fn analyze_video_once(
             })
             .collect();
 
-        if let Err(e) = state.storage_domain.get_db().insert_video_segments(&segment_records).await {
+        if let Err(e) = state.storage_domain.get_db().await?.insert_video_segments(&segment_records).await {
             return Err(format!("保存视频分段失败: {}", e));
         }
     }
@@ -2021,7 +2069,7 @@ async fn analyze_video_once(
             })
             .collect();
 
-        if let Err(e) = state.storage_domain.get_db().insert_timeline_cards(&card_records).await {
+        if let Err(e) = state.storage_domain.get_db().await?.insert_timeline_cards(&card_records).await {
             return Err(format!("保存时间线卡片失败: {}", e));
         }
     }
@@ -2029,20 +2077,16 @@ async fn analyze_video_once(
     let summary =
         llm::build_session_summary(session_start, session_end, &segments, &timeline_cards);
 
-    if let Err(e) = sqlx::query(
-        r#"
-        UPDATE sessions
-        SET title = ?1, summary = ?2, tags = ?3, video_path = ?4
-        WHERE id = ?5
-        "#,
-    )
-    .bind(&summary.title)
-    .bind(&summary.summary)
-    .bind(serde_json::to_string(&summary.tags).unwrap_or_else(|_| "[]".to_string()))
-    .bind(&video_path_str)
-    .bind(session_id)
-    .execute(state.storage_domain.get_db().get_pool())
-    .await
+    let tags_json = serde_json::to_string(&summary.tags).unwrap_or_else(|_| "[]".to_string());
+    if let Err(e) = db
+        .update_session(
+            session_id,
+            &summary.title,
+            &summary.summary,
+            Some(&video_path_str),
+            &tags_json,
+        )
+        .await
     {
         return Err(format!("更新会话信息失败: {}", e));
     }
@@ -2081,22 +2125,16 @@ async fn analyze_unprocessed_videos(
         return Ok(VideoAnalysisReport::default());
     }
 
-    let pool = state.storage_domain.get_db().get_pool();
-    let analyzed_videos = sqlx::query(
-        r#"        SELECT DISTINCT video_path        FROM sessions        WHERE video_path IS NOT NULL        AND summary != '{}'        AND summary != ''        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    // 使用新的抽象方法获取已分析的视频路径（支持 SQLite 和 MariaDB）
+    let analyzed_video_paths = state
+        .storage_domain
+        .get_db()
+        .await?
+        .get_analyzed_video_paths()
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let mut analyzed_paths = HashSet::new();
-    for row in analyzed_videos {
-        if let Ok(path) = sqlx::Row::try_get::<Option<String>, _>(&row, "video_path") {
-            if let Some(p) = path {
-                analyzed_paths.insert(p);
-            }
-        }
-    }
+    let analyzed_paths: HashSet<String> = analyzed_video_paths.into_iter().collect();
 
     let mut unanalyzed_videos: Vec<PathBuf> = video_files
         .into_iter()
@@ -2187,6 +2225,17 @@ async fn analyze_unprocessed_videos(
             }
             Err(err) => {
                 error!("视频分析失败: {}", err);
+
+                // 如果是视频过短错误，删除视频文件避免反复尝试
+                if err.contains("VIDEO_TOO_SHORT") {
+                    info!("检测到视频过短错误，删除视频文件: {:?}", video_path);
+                    if let Err(e) = tokio::fs::remove_file(video_path).await {
+                        error!("删除视频文件失败: {}", e);
+                    } else {
+                        info!("已删除过短的视频文件: {:?}", video_path);
+                    }
+                }
+
                 report.failed += 1;
                 report
                     .messages

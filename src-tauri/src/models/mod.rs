@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 // 重新导出其他模块的类型
 pub use crate::llm::plugin::{ActivityCategory, ActivityTag, KeyMoment};
-pub use crate::storage::{Activity, Frame, Session, SessionDetail};
+pub use crate::storage::{Activity, DatabaseConfig, Frame, Session, SessionDetail};
 
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +28,8 @@ pub struct AppConfig {
     pub capture_settings: Option<CaptureSettings>,
     /// 日志配置
     pub logger_settings: Option<LoggerSettings>,
+    /// 数据库配置
+    pub database_config: Option<DatabaseConfig>,
 }
 
 /// 日志设置
@@ -154,6 +156,8 @@ pub struct PersistedAppConfig {
     pub capture_settings: Option<CaptureSettings>,
     /// 日志配置
     pub logger_settings: Option<LoggerSettings>,
+    /// 数据库配置
+    pub database_config: Option<DatabaseConfig>,
 }
 
 impl Default for PersistedAppConfig {
@@ -168,6 +172,7 @@ impl Default for PersistedAppConfig {
             llm_config: None,
             capture_settings: Some(CaptureSettings::default()),
             logger_settings: Some(LoggerSettings::default()),
+            database_config: None,
         }
     }
 }

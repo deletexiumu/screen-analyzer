@@ -86,6 +86,12 @@
               >
                 <div class="block-content">
                   <div class="block-header">
+                    <OSIcons
+                      v-if="session.device_type"
+                      :type="getDeviceIcon(session.device_type)"
+                      :size="14"
+                      :style="{ color: getDeviceColor(session.device_name), flexShrink: 0 }"
+                    />
                     <el-tag
                       v-if="parseSessionTags(session.tags)[0]"
                       size="small"
@@ -102,9 +108,11 @@
                       </span>
                     </div>
                   </div>
-                  <div class="block-duration">
-                    <el-icon size="10"><Timer /></el-icon>
-                    {{ formatDuration(session.start_time, session.end_time) }}
+                  <div class="block-footer">
+                    <div class="block-duration">
+                      <el-icon size="10"><Timer /></el-icon>
+                      {{ formatDuration(session.start_time, session.end_time) }}
+                    </div>
                   </div>
                   <div v-if="session.video_path" class="block-icon">
                     <el-icon><VideoPlay /></el-icon>
@@ -126,6 +134,12 @@
               >
                 <div class="block-content">
                 <div class="block-header">
+                  <OSIcons
+                    v-if="card.device_type"
+                    :type="getDeviceIcon(card.device_type)"
+                    :size="14"
+                    :style="{ color: getDeviceColor(card.device_name), flexShrink: 0 }"
+                  />
                   <el-tag
                     size="small"
                     :color="getCategoryColor(card.category || 'Other')"
@@ -142,9 +156,11 @@
                     </span>
                   </div>
                 </div>
-                  <div class="block-duration">
-                    <el-icon size="10"><Timer /></el-icon>
-                    {{ formatDuration(card.start_time, card.end_time) }}
+                  <div class="block-footer">
+                    <div class="block-duration">
+                      <el-icon size="10"><Timer /></el-icon>
+                      {{ formatDuration(card.start_time, card.end_time) }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -176,6 +192,16 @@
             <div class="tooltip-duration">
               <el-icon><Timer /></el-icon>
               {{ formatDuration(hoveredSession.start_time, hoveredSession.end_time) }}
+            </div>
+            <div v-if="hoveredSession.device_name" class="tooltip-device">
+              <OSIcons
+                :type="getDeviceIcon(hoveredSession.device_type)"
+                :size="14"
+                :style="{ color: getDeviceColor(hoveredSession.device_name) }"
+              />
+              <span :style="{ color: getDeviceColor(hoveredSession.device_name) }">
+                {{ hoveredSession.device_name }}
+              </span>
             </div>
           </div>
           <div class="tooltip-actions">
@@ -209,6 +235,16 @@
               <el-icon><Timer /></el-icon>
               {{ formatDuration(hoveredCard.start_time, hoveredCard.end_time) }}
             </div>
+            <div v-if="hoveredCard.device_name" class="tooltip-device">
+              <OSIcons
+                :type="getDeviceIcon(hoveredCard.device_type)"
+                :size="14"
+                :style="{ color: getDeviceColor(hoveredCard.device_name) }"
+              />
+              <span :style="{ color: getDeviceColor(hoveredCard.device_name) }">
+                {{ hoveredCard.device_name }}
+              </span>
+            </div>
           </div>
           <div class="tooltip-actions">
             <el-button size="small" @click.stop="selectTimelineCard(hoveredCard)">
@@ -224,6 +260,7 @@
 <script setup>
 import { computed, watch, ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { Refresh, RefreshRight, Timer, VideoPlay, More, Calendar } from '@element-plus/icons-vue'
+import OSIcons from './icons/OSIcons.vue'
 import { useActivityStore } from '../stores/activity'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
@@ -385,7 +422,9 @@ const rawTimelineCards = computed(() => {
       end_time: session.end_time,
       sessionId: session.id,
       sessionTitle: session.title,
-      video_preview_path: session.video_path
+      video_preview_path: session.video_path,
+      device_name: session.device_name,
+      device_type: session.device_type
     })
   })
 
@@ -783,12 +822,16 @@ const getTimelineCardStyle = (card) => {
   const height = card._height ?? Math.max(endPos - startPos, MIN_CARD_HEIGHT)
   const color = getCategoryColor(card.category || 'Other')
 
+  // 如果有设备信息，使用设备颜色作为左边框
+  const deviceColor = card.device_name ? getDeviceColor(card.device_name) : color
+
   return {
     top: `${startPos}px`,
     height: `${height}px`,
     backgroundColor: color + '20', // 20%透明度
     borderColor: color,
-    borderLeftColor: color,
+    borderLeftColor: deviceColor, // 使用设备颜色作为左边框
+    borderLeftWidth: '4px',
     left: '0',
     width: '100%',
     zIndex: 3
@@ -1039,6 +1082,48 @@ const getCategoryFullDisplay = (category) => {
   const name = getCategoryName(category)
   const emoji = getCategoryEmoji(category)
   return `${emoji} ${name}`
+}
+
+// 获取设备图标类型
+const getDeviceIcon = (deviceType) => {
+  if (!deviceType) return 'unknown'
+  const type = deviceType.toLowerCase()
+  if (type === 'windows') return 'windows'
+  if (type === 'macos') return 'macos'
+  if (type === 'linux') return 'linux'
+  return 'unknown'
+}
+
+// 获取设备颜色
+const getDeviceColor = (deviceName) => {
+  if (!deviceName) return '#909399'
+
+  // 使用设备名称生成一致的颜色
+  let hash = 0
+  for (let i = 0; i < deviceName.length; i++) {
+    hash = deviceName.charCodeAt(i) + ((hash << 5) - hash)
+  }
+
+  // 预定义的柔和颜色集合
+  const colors = [
+    '#409EFF', // 蓝色
+    '#67C23A', // 绿色
+    '#E6A23C', // 橙色
+    '#F56C6C', // 红色
+    '#909399', // 灰色
+    '#9C27B0', // 紫色
+    '#00BCD4', // 青色
+    '#FF9800', // 深橙色
+  ]
+
+  return colors[Math.abs(hash) % colors.length]
+}
+
+// 获取设备显示名称（简化长名称）
+const getDeviceDisplayName = (deviceName) => {
+  if (!deviceName) return '未知设备'
+  // 如果设备名称太长，截断显示
+  return deviceName.length > 15 ? deviceName.substring(0, 15) + '...' : deviceName
 }
 
 // 判断是否是当前选中的会话
@@ -1580,13 +1665,36 @@ watch(hoveredCard, (newCard) => {
   margin-top: 6px;
 }
 
+.block-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  gap: 8px;
+}
+
 .block-duration {
   font-size: 10px;
   color: #909399;
-  margin-top: 2px;
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.block-device {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.device-name {
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .block-content {
@@ -1737,6 +1845,9 @@ watch(hoveredCard, (newCard) => {
 
 .tooltip-meta {
   margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .tooltip-duration {
@@ -1745,6 +1856,14 @@ watch(hoveredCard, (newCard) => {
   gap: 4px;
   color: #909399;
   font-size: 13px;
+}
+
+.tooltip-device {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .tooltip-actions {

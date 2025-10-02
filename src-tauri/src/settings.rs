@@ -68,6 +68,9 @@ impl SettingsManager {
         if let Some(logger) = update.logger_settings {
             config.logger_settings = Some(logger);
         }
+        if let Some(db) = update.database_config {
+            config.database_config = Some(db);
+        }
 
         self.save(&config).await?;
         Ok(config.clone())

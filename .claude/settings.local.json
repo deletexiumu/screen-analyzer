@@ -24,7 +24,8 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo test:*)",
       "Bash(cargo fix:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

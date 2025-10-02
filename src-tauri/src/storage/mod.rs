@@ -1,112 +1,21 @@
-// 存储模块 - 管理数据库和文件存储
+// 存储模块 - 统一的数据库抽象层
 
+// 子模块
+pub mod cache;
 pub mod cleaner;
+pub mod config;
 pub mod database;
+pub mod models;
+pub mod repository;
 
+// 重新导出主要类型
+pub use cache::CachedRepository;
 pub use cleaner::StorageCleaner;
+pub use config::{get_device_info, DatabaseConfig, StorageConfig};
 pub use database::Database;
+pub use models::*;
+pub use repository::DatabaseRepository;
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
-/// 会话数据结构
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Session {
-    pub id: Option<i64>,
-    pub start_time: DateTime<Utc>,
-    pub end_time: DateTime<Utc>,
-    pub title: String,
-    pub summary: String,
-    pub video_path: Option<String>,
-    pub tags: String, // JSON序列化的标签
-    pub created_at: Option<DateTime<Utc>>,
-}
-
-/// 帧数据结构
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Frame {
-    pub id: Option<i64>,
-    pub session_id: i64,
-    pub timestamp: DateTime<Utc>,
-    pub file_path: String,
-}
-
-/// 活动数据结构（用于日历视图）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Activity {
-    pub date: String,
-    pub session_count: i32,
-    pub total_duration_minutes: i32,
-    pub main_categories: Vec<String>,
-}
-
-/// 会话详情数据结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionDetail {
-    pub session: Session,
-    pub frames: Vec<Frame>,
-    pub tags: Vec<crate::models::ActivityTag>,
-}
-
-/// 存储配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageConfig {
-    /// 数据保留天数
-    pub retention_days: i64,
-    /// 最大保留天数
-    pub max_retention_days: i64,
-    /// 是否启用自动清理
-    pub auto_cleanup_enabled: bool,
-    /// 清理检查间隔（小时）
-    pub cleanup_interval_hours: u64,
-}
-
-/// LLM调用记录
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct LLMCallRecord {
-    pub id: Option<i64>,
-    pub session_id: Option<i64>,
-    pub provider: String, // openai, anthropic等
-    pub model: String,
-    pub call_type: String, // segment_video, generate_timeline, analyze_frames
-    pub request_headers: String, // JSON格式的请求头
-    pub request_body: String, // JSON格式的请求体
-    pub response_headers: Option<String>, // JSON格式的响应头
-    pub response_body: Option<String>, // 响应内容
-    pub status_code: Option<i32>,
-    pub error_message: Option<String>,
-    pub latency_ms: Option<i64>,     // 调用延迟（毫秒）
-    pub token_usage: Option<String>, // JSON格式的token使用情况
-    pub created_at: DateTime<Utc>,
-}
-
-/// 视频分段记录
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct VideoSegmentRecord {
-    pub id: Option<i64>,
-    pub session_id: i64,
-    pub llm_call_id: Option<i64>, // 关联的LLM调用记录
-    pub start_timestamp: String,  // MM:SS格式
-    pub end_timestamp: String,    // MM:SS格式
-    pub description: String,
-    pub created_at: DateTime<Utc>,
-}
-
-/// 时间线卡片记录
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct TimelineCardRecord {
-    pub id: Option<i64>,
-    pub session_id: i64,
-    pub llm_call_id: Option<i64>, // 关联的LLM调用记录
-    pub start_time: String,
-    pub end_time: String,
-    pub category: String,
-    pub subcategory: String,
-    pub title: String,
-    pub summary: String,
-    pub detailed_summary: String,
-    pub distractions: Option<String>,       // JSON格式的干扰活动
-    pub app_sites: String,                  // JSON格式的应用/网站信息
-    pub video_preview_path: Option<String>, // 本地视频文件路径
-    pub created_at: DateTime<Utc>,
-}
+// 重新导出具体实现（可选，用于高级用法）
+pub use repository::mariadb::MariaDbRepository;
+pub use repository::sqlite::SqliteRepository;

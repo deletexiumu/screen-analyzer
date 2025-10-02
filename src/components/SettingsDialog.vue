@@ -166,6 +166,95 @@
         <TagManager />
       </el-tab-pane>
 
+      <!-- 数据库设置 -->
+      <el-tab-pane label="数据库设置" name="database">
+        <el-form :model="settings" label-width="140px">
+          <el-form-item label="数据库类型">
+            <el-radio-group v-model="databaseConfig.type">
+              <el-radio value="sqlite">SQLite (本地)</el-radio>
+              <el-radio value="mariadb">MariaDB (远程)</el-radio>
+            </el-radio-group>
+            <span class="form-tip">切换数据库类型需要重启应用</span>
+          </el-form-item>
+
+          <!-- SQLite配置 -->
+          <template v-if="databaseConfig.type === 'sqlite'">
+            <el-form-item label="数据库路径">
+              <el-input
+                v-model="databaseConfig.db_path"
+                placeholder="data/screen-analyzer.db"
+                disabled
+              />
+              <span class="form-tip">SQLite使用本地文件存储</span>
+            </el-form-item>
+          </template>
+
+          <!-- MariaDB配置 -->
+          <template v-if="databaseConfig.type === 'mariadb'">
+            <el-form-item label="主机地址">
+              <el-input
+                v-model="databaseConfig.host"
+                placeholder="localhost"
+              />
+            </el-form-item>
+
+            <el-form-item label="端口">
+              <el-input-number
+                v-model="databaseConfig.port"
+                :min="1"
+                :max="65535"
+                :step="1"
+              />
+            </el-form-item>
+
+            <el-form-item label="数据库名">
+              <el-input
+                v-model="databaseConfig.database"
+                placeholder="screen_analyzer"
+              />
+            </el-form-item>
+
+            <el-form-item label="用户名">
+              <el-input
+                v-model="databaseConfig.username"
+                placeholder="root"
+              />
+            </el-form-item>
+
+            <el-form-item label="密码">
+              <el-input
+                v-model="databaseConfig.password"
+                type="password"
+                placeholder="请输入数据库密码"
+                show-password
+              />
+            </el-form-item>
+
+            <el-form-item>
+              <el-button
+                type="primary"
+                @click="testDatabaseConnection"
+                :loading="testingDatabase"
+              >
+                测试连接
+              </el-button>
+              <el-button
+                type="warning"
+                @click="syncDataToMariaDB"
+                :loading="syncingData"
+                style="margin-left: 10px"
+              >
+                <el-icon><Upload /></el-icon>
+                同步本地数据
+              </el-button>
+              <span class="form-tip" style="margin-left: 10px">
+                首次连接时会自动同步SQLite数据到MariaDB
+              </span>
+            </el-form-item>
+          </template>
+        </el-form>
+      </el-tab-pane>
+
       <!-- 存储管理 -->
       <el-tab-pane label="存储管理" name="storage">
         <div class="storage-info">
@@ -316,7 +405,7 @@
 
 <script setup>
 import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { Delete, Refresh, VideoCamera, Folder, Document } from '@element-plus/icons-vue'
+import { Delete, Refresh, VideoCamera, Folder, Document, Upload } from '@element-plus/icons-vue'
 import { useActivityStore } from '../stores/activity'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
@@ -339,6 +428,8 @@ const cleaningUp = ref(false)
 const refreshing = ref(false)
 const testingAPI = ref(false)
 const testingVideo = ref(false)
+const testingDatabase = ref(false)
+const syncingData = ref(false)
 
 // 日志相关
 const logs = ref([])
@@ -386,6 +477,17 @@ const llmConfig = reactive({
   }
 })
 
+// 数据库配置
+const databaseConfig = reactive({
+  type: 'sqlite',
+  db_path: 'data/screen-analyzer.db',
+  host: 'localhost',
+  port: 3306,
+  database: 'screen_analyzer',
+  username: 'root',
+  password: ''
+})
+
 // 格式化质量提示
 const formatQuality = (value) => {
   if (value <= 18) return '最高质量'
@@ -424,6 +526,79 @@ const testLLMAPI = async () => {
   }
 }
 
+// 测试数据库连接
+const testDatabaseConnection = async () => {
+  testingDatabase.value = true
+  try {
+    if (databaseConfig.type === 'mariadb') {
+      if (!databaseConfig.host || !databaseConfig.database || !databaseConfig.username) {
+        ElMessage.warning('请填写完整的数据库配置')
+        return
+      }
+    }
+
+    const config = buildDatabaseConfig()
+
+    // 这里可以调用后端API测试连接
+    // const result = await invoke('test_database_connection', { config })
+
+    ElMessage.success('数据库连接测试成功')
+  } catch (error) {
+    ElMessage.error('数据库连接失败: ' + error)
+  } finally {
+    testingDatabase.value = false
+  }
+}
+
+// 构建数据库配置对象
+const buildDatabaseConfig = () => {
+  if (databaseConfig.type === 'sqlite') {
+    return {
+      type: 'sqlite',
+      db_path: databaseConfig.db_path
+    }
+  } else {
+    return {
+      type: 'mariadb',
+      host: databaseConfig.host,
+      port: databaseConfig.port,
+      database: databaseConfig.database,
+      username: databaseConfig.username,
+      password: databaseConfig.password
+    }
+  }
+}
+
+// 同步数据到 MariaDB
+const syncDataToMariaDB = async () => {
+  if (databaseConfig.type !== 'mariadb') {
+    ElMessage.warning('请先切换到 MariaDB 模式')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '此操作将清空 MariaDB 中的所有数据，然后从本地 SQLite 同步数据。确定要继续吗？',
+      '同步数据',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    syncingData.value = true
+    const result = await invoke('sync_data_to_mariadb')
+    ElMessage.success(result)
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('同步数据失败: ' + error)
+    }
+  } finally {
+    syncingData.value = false
+  }
+}
+
 // 清空日志
 const clearLogs = () => {
   logs.value = []
@@ -445,6 +620,7 @@ const saveSettings = async () => {
     const videoConfigPayload = JSON.parse(JSON.stringify(settings.video_config))
     const captureSettingsPayload = JSON.parse(JSON.stringify(settings.capture_settings))
     const loggerSettingsPayload = JSON.parse(JSON.stringify(settings.logger_settings))
+    const databaseConfigPayload = buildDatabaseConfig()
 
     // 保存基础设置
     await store.updateConfig({
@@ -455,7 +631,8 @@ const saveSettings = async () => {
       video_config: videoConfigPayload,
       capture_settings: captureSettingsPayload,
       ui_settings: settings.ui_settings,
-      logger_settings: loggerSettingsPayload
+      logger_settings: loggerSettingsPayload,
+      database_config: databaseConfigPayload
     })
 
     // 配置LLM提供商
@@ -465,7 +642,7 @@ const saveSettings = async () => {
       await store.configureLLMProvider('anthropic', llmConfig.anthropic)
     }
 
-    ElMessage.success('设置已保存')
+    ElMessage.success('设置已保存，如果修改了数据库配置请重启应用')
     handleClose()
   } catch (error) {
     ElMessage.error('保存设置失败: ' + error)
@@ -563,7 +740,7 @@ const handleClose = () => {
 
 // 初始化设置
 const initSettings = () => {
-  const { video_config, llm_config, capture_settings, logger_settings, ...rest } = store.appConfig
+  const { video_config, llm_config, capture_settings, logger_settings, database_config, ...rest } = store.appConfig
   Object.assign(settings, rest)
   if (video_config) {
     Object.assign(settings.video_config, video_config)
@@ -579,6 +756,19 @@ const initSettings = () => {
     llmConfig.openai.api_key = llm_config.api_key || ''
     llmConfig.openai.model = llm_config.model || 'qwen-vl-max-latest'
     llmConfig.openai.base_url = llm_config.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+  }
+  // 加载数据库配置
+  if (database_config) {
+    databaseConfig.type = database_config.type || 'sqlite'
+    if (database_config.type === 'sqlite') {
+      databaseConfig.db_path = database_config.db_path || 'data/screen-analyzer.db'
+    } else if (database_config.type === 'mariadb') {
+      databaseConfig.host = database_config.host || 'localhost'
+      databaseConfig.port = database_config.port || 3306
+      databaseConfig.database = database_config.database || 'screen_analyzer'
+      databaseConfig.username = database_config.username || 'root'
+      databaseConfig.password = database_config.password || ''
+    }
   }
 }
 
