@@ -27,3 +27,4 @@ dist-ssr
 src-tauri/resources/ffmpeg/windows/ffmpeg.exe
 src-tauri/resources/ffmpeg/macos/ffmpeg
 src-tauri/resources/ffmpeg/linux/ffmpeg
+src-tauri/data/

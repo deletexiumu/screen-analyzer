@@ -2,21 +2,40 @@
 
 <template>
   <div class="summary-container">
-    <div class="summary-header">
-      <h2>All Devices Overview</h2>
-      <div class="active-badge">
-        <span class="badge-number">{{ activeDeviceCount }}</span> Active
-      </div>
+    <!-- Loading 状态 -->
+    <div v-if="loading" class="loading-container">
+      <el-icon class="is-loading" :size="40"><Loading /></el-icon>
+      <p>加载中...</p>
     </div>
 
-    <!-- Today's Summary -->
-    <section class="summary-section summary-text-section">
-      <h3 class="section-title">Today's Summary</h3>
-      <div class="summary-content">
-        <p v-if="todaySummary" class="summary-text">{{ todaySummary }}</p>
-        <p v-else class="empty-text">暂无总结数据</p>
+    <!-- 数据内容 -->
+    <div v-else>
+      <div class="summary-header">
+        <h2>设备概览</h2>
+        <div class="header-right">
+          <el-button
+            @click="refreshSummary"
+            :loading="refreshing"
+            circle
+            class="refresh-button"
+            title="重新生成总结"
+          >
+            <el-icon><Refresh /></el-icon>
+          </el-button>
+          <div class="active-badge">
+            <span class="badge-number">{{ activeDeviceCount }}</span> 活跃设备
+          </div>
+        </div>
       </div>
-    </section>
+
+      <!-- Today's Summary -->
+      <section class="summary-section summary-text-section">
+        <h3 class="section-title">今日总结</h3>
+        <div class="summary-content">
+          <p v-if="todaySummary" class="summary-text">{{ todaySummary }}</p>
+          <p v-else class="empty-text">暂无总结数据</p>
+        </div>
+      </section>
 
     <!-- Device Overview Cards -->
     <section class="summary-section device-stats-section" v-if="deviceStats.length > 0">
@@ -36,14 +55,14 @@
             <span class="device-label">{{ device.name }}</span>
           </div>
           <div class="device-stat-time">{{ device.totalTime }}</div>
-          <div class="device-stat-screenshots">{{ device.screenshots }} screenshots</div>
+          <div class="device-stat-screenshots">{{ device.screenshots }} 张截图</div>
         </div>
       </div>
     </section>
 
     <!-- Parallel Work Analysis -->
     <section class="summary-section parallel-section" v-if="parallelWork.length > 0">
-      <h3 class="section-title">Parallel Work Analysis</h3>
+      <h3 class="section-title">并行工作分析</h3>
       <div class="parallel-work-list">
         <div
           v-for="(work, index) in parallelWork"
@@ -63,7 +82,7 @@
 
     <!-- Device Usage Patterns -->
     <section class="summary-section patterns-section">
-      <h3 class="section-title">Device Usage Patterns</h3>
+      <h3 class="section-title">设备使用模式</h3>
       <div class="usage-patterns">
         <div v-if="deviceUsagePatterns.length > 0" class="patterns-list">
           <div
@@ -78,150 +97,84 @@
         <p v-else class="empty-text">暂无使用模式数据</p>
       </div>
     </section>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useActivityStore } from '../stores/activity'
 import OSIcons from './icons/OSIcons.vue'
-import dayjs from 'dayjs'
+import { Loading, Refresh } from '@element-plus/icons-vue'
+import { invoke } from '@tauri-apps/api/core'
+import { ElMessage } from 'element-plus'
 
 const store = useActivityStore()
 
+// 总结数据（从后端获取）
+const summaryData = ref(null)
+const loading = ref(false)
+const refreshing = ref(false)
+
+// 获取总结数据
+const fetchSummary = async (forceRefresh = false) => {
+  loading.value = true
+  try {
+    const data = await invoke('get_day_summary', {
+      date: store.selectedDate,
+      forceRefresh
+    })
+    summaryData.value = data
+  } catch (error) {
+    console.error('获取总结数据失败:', error)
+    summaryData.value = null
+  } finally {
+    loading.value = false
+  }
+}
+
+// 刷新总结（强制重新生成）
+const refreshSummary = async () => {
+  refreshing.value = true
+  try {
+    await fetchSummary(true)
+    ElMessage.success('总结已重新生成')
+  } catch (error) {
+    ElMessage.error('刷新失败: ' + error)
+  } finally {
+    refreshing.value = false
+  }
+}
+
+// 监听日期变化，重新获取总结
+watch(() => store.selectedDate, () => {
+  fetchSummary()
+}, { immediate: true })
+
 // 活跃设备数量
 const activeDeviceCount = computed(() => {
-  const devices = new Set()
-  store.daySessions.forEach(session => {
-    if (session.device_name) {
-      devices.add(session.device_name)
-    }
-  })
-  return devices.size
+  return summaryData.value?.activeDeviceCount || 0
 })
 
 // 今日总结
 const todaySummary = computed(() => {
-  // 从所有会话中提取总结信息
-  const sessions = store.daySessions
-  if (sessions.length === 0) return null
-
-  // 计算总时长
-  const totalMinutes = sessions.reduce((total, session) => {
-    const start = dayjs(session.start_time)
-    const end = dayjs(session.end_time)
-    return total + end.diff(start, 'minute')
-  }, 0)
-
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-
-  // 统计主要活动类别
-  const categories = {}
-  sessions.forEach(session => {
-    try {
-      const tags = JSON.parse(session.tags || '[]')
-      if (tags.length > 0) {
-        const category = tags[0].category || 'Other'
-        categories[category] = (categories[category] || 0) + 1
-      }
-    } catch (e) {
-      // 忽略解析错误
-    }
-  })
-
-  const mainCategory = Object.keys(categories).reduce((a, b) =>
-    categories[a] > categories[b] ? a : b, 'Work'
-  )
-
-  return `High productivity day with ${sessions.length} work sessions across ${activeDeviceCount.value} devices. ${getCategoryName(mainCategory)} dominated the day with ${hours}h ${minutes}m total tracked time.`
+  return summaryData.value?.summaryText || null
 })
 
 // 设备统计
 const deviceStats = computed(() => {
-  const stats = new Map()
-
-  store.daySessions.forEach(session => {
-    const deviceName = session.device_name || 'Unknown Device'
-    const deviceType = session.device_type || 'unknown'
-
-    if (!stats.has(deviceName)) {
-      stats.set(deviceName, {
-        name: deviceName,
-        type: deviceType,
-        totalMinutes: 0,
-        screenshots: 0
-      })
-    }
-
-    const device = stats.get(deviceName)
-    const start = dayjs(session.start_time)
-    const end = dayjs(session.end_time)
-    device.totalMinutes += end.diff(start, 'minute')
-    // 假设每个会话的截图数量（实际应该从数据库获取）
-    device.screenshots += Math.floor(end.diff(start, 'minute'))
-  })
-
-  return Array.from(stats.values()).map(device => ({
-    ...device,
-    totalTime: formatDuration(device.totalMinutes)
-  }))
+  return summaryData.value?.deviceStats || []
 })
 
 // 并行工作分析
 const parallelWork = computed(() => {
-  const sessions = store.daySessions
-  if (sessions.length < 2) return []
-
-  const overlaps = []
-
-  // 检测时间重叠的会话（表示同时使用多个设备）
-  for (let i = 0; i < sessions.length; i++) {
-    for (let j = i + 1; j < sessions.length; j++) {
-      const s1 = sessions[i]
-      const s2 = sessions[j]
-
-      // 检查是否是不同设备
-      if (s1.device_name === s2.device_name) continue
-
-      const start1 = dayjs(s1.start_time)
-      const end1 = dayjs(s1.end_time)
-      const start2 = dayjs(s2.start_time)
-      const end2 = dayjs(s2.end_time)
-
-      // 检查时间重叠
-      const overlapStart = start1.isAfter(start2) ? start1 : start2
-      const overlapEnd = end1.isBefore(end2) ? end1 : end2
-
-      if (overlapStart.isBefore(overlapEnd)) {
-        const duration = overlapEnd.diff(overlapStart, 'minute')
-        if (duration >= 5) { // 至少5分钟的重叠才算
-          overlaps.push({
-            timeRange: `${overlapStart.format('HH:mm')}-${overlapEnd.format('HH:mm')}`,
-            title: `${getCategoryName(getSessionCategory(s1))} + ${getCategoryName(getSessionCategory(s2))}`,
-            description: `${getActivityName(s1)} on ${s1.device_name} while ${getActivityName(s2)} on ${s2.device_name}`,
-            duration
-          })
-        }
-      }
-    }
-  }
-
-  // 按时间排序并去重
-  return overlaps
-    .sort((a, b) => a.timeRange.localeCompare(b.timeRange))
-    .slice(0, 5) // 只显示前5个
+  return summaryData.value?.parallelWork || []
 })
 
-// 格式化时长
-const formatDuration = (minutes) => {
-  const hours = Math.floor(minutes / 60)
-  const mins = minutes % 60
-  if (hours > 0) {
-    return `${hours}h ${mins}m`
-  }
-  return `${mins}m`
-}
+// 设备使用模式
+const deviceUsagePatterns = computed(() => {
+  return summaryData.value?.usagePatterns || []
+})
 
 // 获取设备图标类型
 const getDeviceIcon = (deviceType) => {
@@ -255,116 +208,33 @@ const getDeviceColor = (deviceName) => {
 
   return colors[Math.abs(hash) % colors.length]
 }
-
-// 获取会话类别
-const getSessionCategory = (session) => {
-  try {
-    const tags = JSON.parse(session.tags || '[]')
-    return tags[0]?.category || 'Other'
-  } catch {
-    return 'Other'
-  }
-}
-
-// 获取活动名称
-const getActivityName = (session) => {
-  if (session.title && session.title !== 'null') {
-    return session.title.length > 30 ? session.title.substring(0, 30) + '...' : session.title
-  }
-  return getCategoryName(getSessionCategory(session))
-}
-
-// 类别映射
-const categoryConfig = {
-  'work': { name: 'Code Development', emoji: '💼' },
-  'communication': { name: 'Meetings', emoji: '💬' },
-  'learning': { name: 'Learning', emoji: '📚' },
-  'personal': { name: 'Personal', emoji: '🏠' },
-  'idle': { name: 'Idle', emoji: '⏸️' },
-  'other': { name: 'Other', emoji: '📌' },
-  'Work': { name: 'Code Development', emoji: '💼' },
-  'Coding': { name: 'Code Development', emoji: '💼' },
-  'coding': { name: 'Code Development', emoji: '💼' },
-  'Meeting': { name: 'Meetings', emoji: '💬' },
-  'meeting': { name: 'Meetings', emoji: '💬' },
-  'Communication': { name: 'Meetings', emoji: '💬' },
-  'Personal': { name: 'Personal', emoji: '🏠' },
-  'Idle': { name: 'Idle', emoji: '⏸️' },
-  'Other': { name: 'Other', emoji: '📌' }
-}
-
-// 获取类别名称
-const getCategoryName = (category) => {
-  if (!category) return 'Other'
-  const config = categoryConfig[category] || categoryConfig[category.toLowerCase()]
-  return config?.name || category
-}
-
-// 设备使用模式
-const deviceUsagePatterns = computed(() => {
-  const sessions = store.daySessions
-  if (sessions.length === 0) return []
-
-  const patterns = []
-
-  // 计算最活跃的时间段
-  const hourActivity = new Array(24).fill(0)
-  sessions.forEach(session => {
-    const start = dayjs(session.start_time)
-    const end = dayjs(session.end_time)
-    for (let hour = start.hour(); hour <= end.hour(); hour++) {
-      hourActivity[hour]++
-    }
-  })
-
-  const peakHour = hourActivity.indexOf(Math.max(...hourActivity))
-  if (peakHour >= 0) {
-    patterns.push({
-      label: '最活跃时段',
-      value: `${peakHour.toString().padStart(2, '0')}:00 - ${(peakHour + 1).toString().padStart(2, '0')}:00`
-    })
-  }
-
-  // 计算平均会话时长
-  const avgDuration = sessions.reduce((sum, session) => {
-    const start = dayjs(session.start_time)
-    const end = dayjs(session.end_time)
-    return sum + end.diff(start, 'minute')
-  }, 0) / sessions.length
-
-  patterns.push({
-    label: '平均会话时长',
-    value: `${Math.round(avgDuration)} 分钟`
-  })
-
-  // 计算设备切换次数
-  let deviceSwitches = 0
-  let lastDevice = null
-  sessions.forEach(session => {
-    if (lastDevice && lastDevice !== session.device_name) {
-      deviceSwitches++
-    }
-    lastDevice = session.device_name
-  })
-
-  if (activeDeviceCount.value > 1) {
-    patterns.push({
-      label: '设备切换次数',
-      value: `${deviceSwitches} 次`
-    })
-  }
-
-  return patterns
-})
 </script>
 
 <style scoped>
 .summary-container {
   height: 100%;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   padding: 32px;
-  background: #0f0f0f;
+  background: #1a1a1a;
+  border-radius: 8px;
+  border: 1px solid #2d2d2d;
   color: #e0e0e0;
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #909399;
+}
+
+.loading-container p {
+  margin-top: 16px;
+  font-size: 14px;
 }
 
 .summary-header {
@@ -381,6 +251,29 @@ const deviceUsagePatterns = computed(() => {
   font-weight: 700;
   color: #ffffff;
   letter-spacing: -0.5px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.refresh-button {
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+  color: #e0e0e0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  transition: all 0.3s ease;
+}
+
+.refresh-button:hover {
+  background: #3d3d3d;
+  border-color: #4d4d4d;
+  color: #ffffff;
+  transform: rotate(180deg);
 }
 
 .active-badge {
@@ -499,16 +392,16 @@ const deviceUsagePatterns = computed(() => {
 }
 
 .parallel-work-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr); /* 一行三列 */
   gap: 12px;
   margin-top: 16px;
 }
 
 .parallel-work-card {
   display: flex;
-  gap: 14px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
   padding: 16px 18px;
   background: #1a1a1a;
   border-radius: 8px;
@@ -519,7 +412,7 @@ const deviceUsagePatterns = computed(() => {
 .parallel-work-card:hover {
   background: #1f1f1f;
   border-color: #3d3d3d;
-  transform: translateX(2px);
+  transform: translateY(-2px);
 }
 
 .parallel-time-badge {
@@ -530,8 +423,8 @@ const deviceUsagePatterns = computed(() => {
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
-  flex-shrink: 0;
   letter-spacing: 0.3px;
+  align-self: flex-start;
 }
 
 .parallel-content {

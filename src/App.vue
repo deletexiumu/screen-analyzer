@@ -45,20 +45,20 @@
 
       <!-- 主内容区 -->
       <el-main class="app-main">
-        <el-row :gutter="20" class="main-content">
+        <div class="main-content">
           <!-- 左侧活动列表 -->
-          <el-col :span="8">
+          <div class="left-panel">
             <ActivityListView
               :date="store.selectedDate"
               @session-click="handleSessionClick"
             />
-          </el-col>
+          </div>
 
           <!-- 右侧总结 -->
-          <el-col :span="16">
+          <div class="right-panel">
             <SummaryView />
-          </el-col>
-        </el-row>
+          </div>
+        </div>
       </el-main>
 
       <!-- 底部状态栏 -->
@@ -382,22 +382,23 @@ onUnmounted(() => {
 
 .main-content {
   height: 100%;
+  display: flex;
+  flex-direction: row;
   gap: 20px;
 }
 
-.main-content > .el-col {
+.left-panel {
+  flex: 0 0 33.33%; /* 大约占 1/3 宽度 */
   height: 100%;
-  overflow: hidden;
+  overflow-y: auto;
+  min-width: 0; /* 允许内容收缩 */
 }
 
-/* 左侧时间线可以滚动 */
-.main-content > .el-col:first-child {
+.right-panel {
+  flex: 1; /* 占据剩余空间 */
+  height: 100%;
   overflow-y: auto;
-}
-
-/* 右侧总结可以滚动 */
-.main-content > .el-col:last-child {
-  overflow-y: auto;
+  min-width: 0; /* 允许内容收缩 */
 }
 
 .app-footer {
