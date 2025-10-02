@@ -4,7 +4,7 @@
 
 use tokio::sync::{mpsc, oneshot};
 use anyhow::Result;
-use crate::llm::{LLMManager, LLMConfig, QwenConfig, SessionSummary};
+use crate::llm::{LLMManager, LLMConfig, QwenConfig, SessionSummary, SessionBrief};
 
 use crate::llm::{TimelineAnalysis, TimelineCard, VideoSegment};
 use crate::storage::Database;
@@ -69,11 +69,7 @@ pub enum LLMCommand {
     /// 生成每日总结
     GenerateDaySummary {
         date: String,
-        device_stats: String,
-        parallel_work: String,
-        usage_patterns: String,
-        session_count: usize,
-        total_minutes: i64,
+        sessions: Vec<SessionBrief>,
         reply: oneshot::Sender<Result<String>>,
     },
 
@@ -159,22 +155,11 @@ impl LLMManagerActor {
 
                 LLMCommand::GenerateDaySummary {
                     date,
-                    device_stats,
-                    parallel_work,
-                    usage_patterns,
-                    session_count,
-                    total_minutes,
+                    sessions,
                     reply,
                 } => {
                     let result = self.manager
-                        .generate_day_summary(
-                            &date,
-                            &device_stats,
-                            &parallel_work,
-                            &usage_patterns,
-                            session_count,
-                            total_minutes,
-                        )
+                        .generate_day_summary(&date, &sessions)
                         .await;
                     let _ = reply.send(result);
                 }
@@ -307,33 +292,27 @@ impl LLMHandle {
 
     /// 健康检查 - 测试Actor是否响应
     ///
-    /// 返回true表示Actor正常运行，false表示Actor无响应或已停止
-    /// 超时时间为5秒
     /// 生成每日总结
     pub async fn generate_day_summary(
         &self,
         date: &str,
-        device_stats: &str,
-        parallel_work: &str,
-        usage_patterns: &str,
-        session_count: usize,
-        total_minutes: i64,
+        sessions: &[SessionBrief],
     ) -> Result<String> {
         let (reply, rx) = oneshot::channel();
         self.sender
             .send(LLMCommand::GenerateDaySummary {
                 date: date.to_string(),
-                device_stats: device_stats.to_string(),
-                parallel_work: parallel_work.to_string(),
-                usage_patterns: usage_patterns.to_string(),
-                session_count,
-                total_minutes,
+                sessions: sessions.to_vec(),
                 reply,
             })
             .await
             .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
         rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
     }
+
+    /// 健康检查
+    /// 返回true表示Actor正常运行，false表示Actor无响应或已停止
+    /// 超时时间为5秒
 
     pub async fn health_check(&self) -> bool {
         let (reply, rx) = oneshot::channel();

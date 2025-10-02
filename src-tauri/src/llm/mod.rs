@@ -4,8 +4,8 @@ pub mod plugin;
 pub mod qwen;
 
 pub use plugin::{
-    ActivityCategory, ActivityTag, AppSites, Distraction, KeyMoment, LLMProvider, SessionSummary,
-    TimelineCard, VideoSegment,
+    ActivityCategory, ActivityTag, AppSites, Distraction, KeyMoment, LLMProvider, SessionBrief,
+    SessionSummary, TimelineCard, VideoSegment,
 };
 pub use qwen::QwenProvider;
 
@@ -196,21 +196,10 @@ impl LLMManager {
     pub async fn generate_day_summary(
         &self,
         date: &str,
-        device_stats: &str,
-        parallel_work: &str,
-        usage_patterns: &str,
-        session_count: usize,
-        total_minutes: i64,
+        sessions: &[SessionBrief],
     ) -> Result<String> {
         self.provider
-            .generate_day_summary(
-                date,
-                device_stats,
-                parallel_work,
-                usage_patterns,
-                session_count,
-                total_minutes,
-            )
+            .generate_day_summary(date, sessions)
             .await
     }
 

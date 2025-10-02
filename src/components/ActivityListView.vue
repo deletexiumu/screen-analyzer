@@ -61,8 +61,11 @@
       <div class="timeline-bars">
         <h3>TODAY'S TIMELINE</h3>
         <div class="time-range">
-          <span>09:00</span>
-          <span>18:00</span>
+          <span>0h</span>
+          <span>6h</span>
+          <span>12h</span>
+          <span>18h</span>
+          <span>24h</span>
         </div>
         <div class="device-bars">
           <div
@@ -255,11 +258,11 @@ const deviceTimelines = computed(() => {
       const duration = end.diff(start, 'minute')
       device.totalMinutes += duration
 
-      // 计算在时间轴上的位置（9:00-18:00，共9小时）
+      // 计算在时间轴上的位置（0:00-24:00，共24小时）
       const startHour = start.hour() + start.minute() / 60
       const endHour = end.hour() + end.minute() / 60
-      const startPercent = ((startHour - 9) / 9) * 100
-      const widthPercent = ((endHour - startHour) / 9) * 100
+      const startPercent = (startHour / 24) * 100
+      const widthPercent = ((endHour - startHour) / 24) * 100
 
       // 获取分类颜色
       const category = getSessionCategory(session)

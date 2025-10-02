@@ -4,8 +4,7 @@ use super::plugin::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use chrono::Timelike;
-use chrono::Utc;
+use chrono::{DateTime, Local, TimeZone, Timelike};
 use reqwest::{multipart, Client};
 use serde::Deserialize;
 use serde_json::json;
@@ -1228,47 +1227,77 @@ impl LLMProvider for QwenProvider {
     async fn generate_day_summary(
         &self,
         date: &str,
-        device_stats: &str,
-        parallel_work: &str,
-        usage_patterns: &str,
-        session_count: usize,
-        total_minutes: i64,
+        sessions: &[crate::llm::SessionBrief],
     ) -> Result<String> {
         let api_key = self.api_key.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Qwen API Key未配置")
         })?;
 
+        // 构建会话时间线文本
+        // 如果会话数量过多，需要智能合并或筛选以控制 token 数量
+        let max_sessions_display = 200; // 最多显示50个会话
+        let sessions_to_process: Vec<&crate::llm::SessionBrief> = if sessions.len() > max_sessions_display {
+            info!("会话数量 {} 超过限制，将筛选重要会话", sessions.len());
+            // 按时长排序，选择较长的会话
+            let mut sorted_sessions: Vec<_> = sessions.iter().collect();
+            sorted_sessions.sort_by_key(|s| std::cmp::Reverse((s.end_time - s.start_time).num_minutes()));
+            sorted_sessions.into_iter().take(max_sessions_display).collect()
+        } else {
+            sessions.iter().collect()
+        };
+
+        let mut sessions_text = String::new();
+        for session in sessions_to_process {
+            let start_local = Local.from_utc_datetime(&session.start_time.naive_utc());
+            let end_local = Local.from_utc_datetime(&session.end_time.naive_utc());
+            let start_time = start_local.format("%H:%M");
+            let end_time = end_local.format("%H:%M");
+            let duration = (session.end_time - session.start_time).num_minutes();
+
+            // 如果 summary 过长，进行截断（安全截断，考虑 UTF-8 字符边界）
+            let summary_display = if session.summary.chars().count() > 100 {
+                let truncated: String = session.summary.chars().take(100).collect();
+                format!("{}...", truncated)
+            } else {
+                session.summary.clone()
+            };
+
+            sessions_text.push_str(&format!(
+                "\n- {} - {} ({} 分钟): {}\n  {}",
+                start_time, end_time, duration, session.title, summary_display
+            ));
+        }
+
+        // 计算总时长
+        let total_minutes: i64 = sessions
+            .iter()
+            .map(|s| (s.end_time - s.start_time).num_minutes())
+            .sum();
+
         // 构建提示词
         let prompt = format!(
-            r#"根据以下数据，生成一份简洁的每日工作总结（2-3句话，使用中文）：
+            r#"基于以下今日屏幕活动记录，生成一份工作总结：
 
 日期: {}
 会话数: {}
 总时长: {} 分钟
 
-设备统计:
-{}
-
-并行工作:
-{}
-
-使用模式:
+今日活动时间线:
 {}
 
 要求：
 1. 使用中文，语气自然、专业
-2. 用2-3句话概括今天的主要活动
-3. 突出重点数据（如主要活动、时长、设备等）
-4. 保持简洁，不要超过80字
-5. 使用类似这样的格式："今天共记录了X个工作会话，使用了Y台设备。主要活动集中在Z领域，总计H小时M分钟。"
+2. 重点总结真正在做什么工作/活动，而不是简单罗列统计数据
+3. 按时间顺序或主题归纳今天的主要工作内容
+4. 可以提及关键时间段的重要活动
+5. 字数控制在 150-200 字以内
+6. 输出格式要清晰易读，可以使用适当的分段
 
-请直接返回总结文本（只要中文总结，不要其他说明）。"#,
+请直接返回总结文本（只要中文总结，不要标题、不要其他说明）。"#,
             date,
-            session_count,
+            sessions.len(),
             total_minutes,
-            device_stats,
-            parallel_work,
-            usage_patterns
+            sessions_text
         );
 
         info!("使用Qwen生成每日总结: {}", date);
@@ -1283,7 +1312,7 @@ impl LLMProvider for QwenProvider {
                 }
             ],
             "temperature": 0.7,
-            "max_tokens": 200
+            "max_tokens": 10000  // 支持 200 字的中文输出（约 400-500 tokens）
         });
 
         let response = self

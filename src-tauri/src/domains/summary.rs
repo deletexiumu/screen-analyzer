@@ -164,7 +164,7 @@ impl SummaryGenerator {
 
         // 生成总结文本
         let summary_text = self
-            .generate_summary_text(date, &sessions, &device_stats, &parallel_work, &usage_patterns, active_device_count)
+            .generate_summary_text(date, &sessions)
             .await;
 
         let summary = DaySummary {
@@ -441,10 +441,6 @@ impl SummaryGenerator {
         &self,
         date: &str,
         sessions: &[Session],
-        device_stats: &[DeviceStat],
-        parallel_work: &[ParallelWork],
-        usage_patterns: &[UsagePattern],
-        active_device_count: usize,
     ) -> String {
         // 计算总时长
         let total_minutes: i64 = sessions
@@ -458,11 +454,7 @@ impl SummaryGenerator {
                 .generate_summary_with_llm(
                     llm_handle,
                     date,
-                    device_stats,
-                    parallel_work,
-                    usage_patterns,
-                    sessions.len(),
-                    total_minutes,
+                    sessions,
                 )
                 .await
             {
@@ -477,6 +469,13 @@ impl SummaryGenerator {
             }
         }
 
+        // 统计活跃设备数
+        let active_devices: std::collections::HashSet<String> = sessions
+            .iter()
+            .filter_map(|s| s.device_name.clone())
+            .collect();
+        let active_device_count = active_devices.len();
+
         // 规则生成（fallback）
         self.generate_summary_with_rules(sessions, total_minutes, active_device_count)
     }
@@ -486,30 +485,22 @@ impl SummaryGenerator {
         &self,
         llm_handle: &LLMHandle,
         date: &str,
-        device_stats: &[DeviceStat],
-        parallel_work: &[ParallelWork],
-        usage_patterns: &[UsagePattern],
-        session_count: usize,
-        total_minutes: i64,
+        sessions: &[Session],
     ) -> Result<String, String> {
-        // 将数据序列化为 JSON 字符串
-        let device_stats_json =
-            serde_json::to_string_pretty(device_stats).unwrap_or_else(|_| "[]".to_string());
-        let parallel_work_json =
-            serde_json::to_string_pretty(parallel_work).unwrap_or_else(|_| "[]".to_string());
-        let usage_patterns_json =
-            serde_json::to_string_pretty(usage_patterns).unwrap_or_else(|_| "[]".to_string());
+        // 将 Session 转换为 SessionBrief
+        let session_briefs: Vec<crate::llm::SessionBrief> = sessions
+            .iter()
+            .map(|s| crate::llm::SessionBrief {
+                start_time: s.start_time,
+                end_time: s.end_time,
+                title: s.title.clone(),
+                summary: s.summary.clone(),
+            })
+            .collect();
 
         // 调用 LLM
         llm_handle
-            .generate_day_summary(
-                date,
-                &device_stats_json,
-                &parallel_work_json,
-                &usage_patterns_json,
-                session_count,
-                total_minutes,
-            )
+            .generate_day_summary(date, &session_briefs)
             .await
             .map_err(|e| e.to_string())
     }

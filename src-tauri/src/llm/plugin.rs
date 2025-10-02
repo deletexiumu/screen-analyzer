@@ -515,6 +515,19 @@ pub struct KeyMoment {
     pub importance: u8,
 }
 
+/// 用于每日总结的会话简要信息
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionBrief {
+    /// 会话开始时间
+    pub start_time: DateTime<Utc>,
+    /// 会话结束时间
+    pub end_time: DateTime<Utc>,
+    /// 会话标题
+    pub title: String,
+    /// 会话摘要
+    pub summary: String,
+}
+
 /// 会话总结
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSummary {
@@ -640,27 +653,24 @@ pub trait LLMProvider: Send + Sync + std::any::Any {
     ///
     /// # 参数
     /// * `date` - 日期 (YYYY-MM-DD)
-    /// * `device_stats` - 设备统计数据
-    /// * `parallel_work` - 并行工作数据
-    /// * `usage_patterns` - 使用模式数据
-    /// * `session_count` - 会话数量
-    /// * `total_minutes` - 总时长（分钟）
+    /// * `sessions` - 当天的所有会话简要信息（包含时间段和摘要）
     ///
     /// # 返回
     /// * 生成的总结文本
     async fn generate_day_summary(
         &self,
         _date: &str,
-        _device_stats: &str,
-        _parallel_work: &str,
-        _usage_patterns: &str,
-        _session_count: usize,
-        _total_minutes: i64,
+        _sessions: &[SessionBrief],
     ) -> Result<String> {
         // 默认实现：返回简单的基于规则的总结
+        let total_minutes: i64 = _sessions
+            .iter()
+            .map(|s| (s.end_time - s.start_time).num_minutes())
+            .sum();
         Ok(format!(
-            "Today you had {} sessions with {} minutes of tracked activity.",
-            _session_count, _total_minutes
+            "今天共记录了 {} 个工作会话，总计 {} 分钟。",
+            _sessions.len(),
+            total_minutes
         ))
     }
 }
