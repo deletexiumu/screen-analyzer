@@ -270,6 +270,10 @@ const props = defineProps({
   date: {
     type: String,
     required: true
+  },
+  selectedDevice: {
+    type: String,
+    default: 'all'
   }
 })
 
@@ -376,8 +380,15 @@ const formatHour = (hour) => {
   return `${hour.toString().padStart(2, '0')}:00`
 }
 
-// 会话列表
-const sessions = computed(() => store.daySessions)
+// 会话列表（根据选中的设备过滤）
+const sessions = computed(() => {
+  if (props.selectedDevice === 'all') {
+    return store.daySessions
+  }
+  return store.daySessions.filter(session =>
+    session.device_name === props.selectedDevice
+  )
+})
 
 // 是否启用智能聚合
 const enableAggregation = ref(true)
@@ -1466,10 +1477,10 @@ watch(hoveredCard, (newCard) => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: white;
+  background: #1a1a1a;
   border-radius: 8px;
   padding: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  border: 1px solid #2d2d2d;
 }
 
 .timeline-header {
@@ -1489,8 +1500,8 @@ watch(hoveredCard, (newCard) => {
 .timeline-title h3 {
   margin: 0;
   font-size: 16px;
-  font-weight: 500;
-  color: #303133;
+  font-weight: 600;
+  color: #ffffff;
 }
 
 .merge-badge {
@@ -1600,7 +1611,7 @@ watch(hoveredCard, (newCard) => {
 
 .time-label {
   font-size: 12px;
-  color: #909399;
+  color: #666666;
   width: 45px;
   text-align: right;
   padding-right: 10px;
@@ -1611,7 +1622,7 @@ watch(hoveredCard, (newCard) => {
   left: 60px;
   width: calc(100vw - 140px);
   height: 1px;
-  background-color: #e4e7ed;
+  background-color: #2d2d2d;
 }
 
 /* 活动区块 */
@@ -1629,20 +1640,23 @@ watch(hoveredCard, (newCard) => {
   transition: all 0.3s;
   padding: 8px 12px;
   overflow: hidden;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
   min-height: 60px;
+  border: 1px solid #2d2d2d;
 }
 
 .activity-block:hover {
   transform: translateX(2px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   z-index: 10;
+  border-color: #3d3d3d;
 }
 
 .activity-block.is-active {
   border-left-width: 6px;
-  background-color: #ecf5ff !important;
+  background-color: #2d2d2d !important;
   opacity: 1 !important;
+  border-color: #4d4d4d;
 }
 
 /* 会话区块和时间线卡片区块的不同样式 */
@@ -1659,25 +1673,25 @@ watch(hoveredCard, (newCard) => {
 .timeline-card-block {
   z-index: 2;
   border-left-width: 4px;
-  background: linear-gradient(90deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.95) 100%);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(90deg, rgba(45,45,45,0.98) 0%, rgba(35,35,35,0.95) 100%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
   min-height: 24px;
 }
 
 .timeline-card-block.is-merged {
   border-left-width: 6px;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12);
-  background: linear-gradient(90deg, #fff 0%, #fafafa 100%);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+  background: linear-gradient(90deg, #2d2d2d 0%, #252525 100%);
 }
 
 .timeline-card-block:hover {
   transform: translateX(2px) scale(1.01);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   z-index: 20;
 }
 
 .timeline-card-block .block-title-text {
-  color: #2c3e50;
+  color: #e0e0e0;
 }
 
 .timeline-card-block .merged-count {
@@ -1775,7 +1789,7 @@ watch(hoveredCard, (newCard) => {
 
 .block-title-text {
   font-size: 12px;
-  color: #303133;
+  color: #e0e0e0;
   font-weight: 600;
   line-height: 1.4;
   flex: 1;
@@ -1819,7 +1833,7 @@ watch(hoveredCard, (newCard) => {
 
 .block-time {
   font-size: 11px;
-  color: #606266;
+  color: #909399;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1837,16 +1851,16 @@ watch(hoveredCard, (newCard) => {
 /* 悬浮提示框 */
 .session-tooltip {
   position: fixed;
-  background: white;
+  background: #2d2d2d;
   border-radius: 10px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
   padding: 18px;
   z-index: 2000;
   max-width: 350px;
   min-width: 280px;
   transition: opacity 0.2s;
   pointer-events: none; /* 防止提示框干扰鼠标事件 */
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  border: 1px solid #3d3d3d;
 }
 
 .tooltip-header {
@@ -1858,7 +1872,7 @@ watch(hoveredCard, (newCard) => {
 
 .tooltip-header h4 {
   margin: 0;
-  color: #303133;
+  color: #ffffff;
   font-size: 16px;
 }
 
@@ -1873,7 +1887,7 @@ watch(hoveredCard, (newCard) => {
 }
 
 .tooltip-summary {
-  color: #606266;
+  color: #b0b0b0;
   font-size: 14px;
   line-height: 1.5;
   margin-bottom: 12px;

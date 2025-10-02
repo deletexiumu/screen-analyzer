@@ -6,7 +6,19 @@
       <!-- 顶部栏 -->
       <el-header class="app-header">
         <div class="header-left">
-          <h1>屏幕活动分析器</h1>
+          <h1>Screen Summary</h1>
+          <div class="date-selector">
+            <el-date-picker
+              v-model="selectedDateObj"
+              type="date"
+              placeholder="选择日期"
+              :clearable="false"
+              format="YYYY/MM/DD"
+              value-format="YYYY-MM-DD"
+              @change="handleDateChange"
+              class="dark-date-picker"
+            />
+          </div>
           <div class="status-info">
             <el-tag
               :type="store.isCapturing ? 'success' : 'danger'"
@@ -17,65 +29,34 @@
               </el-icon>
               {{ store.isCapturing ? '正在截屏' : '已暂停' }}
             </el-tag>
-            <el-tag v-if="store.isProcessing" type="warning">
-              <el-icon class="is-loading">
-                <Loading />
-              </el-icon>
-              正在分析
-            </el-tag>
           </div>
         </div>
 
         <div class="header-actions">
-          <el-button
-            @click="handleToggleCapture"
-            :type="store.isCapturing ? 'danger' : 'success'"
-          >
-            <el-icon>
-              <component :is="store.isCapturing ? VideoPause : VideoPlay" />
-            </el-icon>
-            {{ store.isCapturing ? '暂停' : '恢复' }}
-          </el-button>
-          <el-button @click="showSettings = true">
+          <el-button @click="showSettings = true" class="icon-button">
             <el-icon><Setting /></el-icon>
-            设置
+            Settings
           </el-button>
-          <el-dropdown @command="handleMoreCommand" style="margin-left: 12px">
-            <el-button>
-              <el-icon><More /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="analyze" :disabled="store.isProcessing">
-                  <el-icon><MagicStick /></el-icon>
-                  手动分析
-                </el-dropdown-item>
-                <el-dropdown-item command="test-capture">
-                  <el-icon><Camera /></el-icon>
-                  测试截屏
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <el-button @click="handleExport" class="export-button" type="primary">
+            Export
+          </el-button>
         </div>
       </el-header>
 
       <!-- 主内容区 -->
       <el-main class="app-main">
         <el-row :gutter="20" class="main-content">
-          <!-- 左侧日历 -->
-          <el-col :span="14">
-            <CalendarView
-              @date-select="handleDateSelect"
-            />
-          </el-col>
-
-          <!-- 右侧时间线 -->
-          <el-col :span="10">
-            <TimelineView
+          <!-- 左侧活动列表 -->
+          <el-col :span="8">
+            <ActivityListView
               :date="store.selectedDate"
               @session-click="handleSessionClick"
             />
+          </el-col>
+
+          <!-- 右侧总结 -->
+          <el-col :span="16">
+            <SummaryView />
           </el-col>
         </el-row>
       </el-main>
@@ -125,8 +106,8 @@ import {
   More
 } from '@element-plus/icons-vue'
 import { useActivityStore } from './stores/activity'
-import CalendarView from './components/CalendarView.vue'
-import TimelineView from './components/TimelineView.vue'
+import ActivityListView from './components/ActivityListView.vue'
+import SummaryView from './components/SummaryView.vue'
 import SessionDetail from './components/SessionDetail.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import dayjs from 'dayjs'
@@ -139,6 +120,7 @@ const selectedSessionId = ref(null)
 const showSettings = ref(false)
 const statusTimer = ref(null)
 const refreshTimer = ref(null) // 定时刷新数据
+const selectedDateObj = ref(dayjs().format('YYYY-MM-DD'))
 
 // 格式化时间
 const formatTime = (timestamp) => {
@@ -216,6 +198,17 @@ const handleMoreCommand = (command) => {
 // 处理日期选择
 const handleDateSelect = (date) => {
   console.log('Date selected:', date)
+}
+
+// 处理日期变化
+const handleDateChange = (date) => {
+  store.selectedDate = date
+  store.fetchDaySessions(date)
+}
+
+// 处理导出
+const handleExport = () => {
+  ElMessage.info('导出功能开发中...')
 }
 
 // 处理会话点击
@@ -311,7 +304,7 @@ onUnmounted(() => {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   height: 100vh;
-  background: #f5f7fa;
+  background: #0f0f0f;
 }
 
 .el-container {
@@ -319,25 +312,32 @@ onUnmounted(() => {
 }
 
 .app-header {
-  background: white;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  background: #1a1a1a;
+  border-bottom: 1px solid #2d2d2d;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 32px;
   z-index: 100;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 24px;
 }
 
 .header-left h1 {
   font-size: 20px;
-  color: #303133;
-  font-weight: 500;
+  color: #ffffff;
+  font-weight: 600;
+  margin: 0;
+}
+
+.date-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .status-info {
@@ -347,41 +347,66 @@ onUnmounted(() => {
 
 .header-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
+  align-items: center;
+}
+
+.icon-button {
+  background: transparent;
+  border: 1px solid #3d3d3d;
+  color: #e0e0e0;
+}
+
+.icon-button:hover {
+  background: #2d2d2d;
+  border-color: #4d4d4d;
+  color: #ffffff;
+}
+
+.export-button {
+  background: #409EFF;
+  border-color: #409EFF;
+  color: white;
+}
+
+.export-button:hover {
+  background: #66b1ff;
+  border-color: #66b1ff;
 }
 
 .app-main {
   padding: 20px;
   overflow: hidden;
+  background: #0f0f0f;
 }
 
 .main-content {
   height: 100%;
+  gap: 20px;
 }
 
 .main-content > .el-col {
   height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-/* 左侧日历保持固定，不滚动 */
-.main-content > .el-col:first-child {
   overflow: hidden;
 }
 
-/* 右侧时间线可以滚动 */
+/* 左侧时间线可以滚动 */
+.main-content > .el-col:first-child {
+  overflow-y: auto;
+}
+
+/* 右侧总结可以滚动 */
 .main-content > .el-col:last-child {
   overflow-y: auto;
 }
 
 .app-footer {
-  background: white;
-  border-top: 1px solid #ebeef5;
+  background: #1a1a1a;
+  border-top: 1px solid #2d2d2d;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 32px;
   font-size: 13px;
   color: #909399;
 }
@@ -415,7 +440,7 @@ onUnmounted(() => {
   animation: rotate 2s linear infinite;
 }
 
-/* Element Plus 主题调整 */
+/* Element Plus 黑色主题调整 */
 .el-button {
   border-radius: 6px;
 }
@@ -427,10 +452,123 @@ onUnmounted(() => {
 .el-card {
   border-radius: 8px;
   border: none;
+  background: #1a1a1a;
+  color: #e0e0e0;
 }
 
 .el-dialog {
   border-radius: 12px;
+  background: #1a1a1a;
+  border: 1px solid #2d2d2d;
+}
+
+.el-dialog__header {
+  background: #1a1a1a;
+  border-bottom: 1px solid #2d2d2d;
+}
+
+.el-dialog__title {
+  color: #ffffff;
+}
+
+.el-dialog__body {
+  background: #1a1a1a;
+  color: #e0e0e0;
+}
+
+.el-empty__description {
+  color: #666666;
+}
+
+/* 日期选择器黑色主题 */
+.dark-date-picker {
+  --el-color-primary: #409EFF;
+  --el-fill-color-blank: #2d2d2d;
+  --el-text-color-primary: #e0e0e0;
+  --el-border-color: #3d3d3d;
+}
+
+.dark-date-picker .el-input__wrapper {
+  background: #2d2d2d;
+  border-color: #3d3d3d;
+  box-shadow: none;
+}
+
+.dark-date-picker .el-input__wrapper:hover {
+  background: #2d2d2d;
+  border-color: #4d4d4d;
+}
+
+.dark-date-picker .el-input__inner {
+  color: #e0e0e0;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3d3d3d;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4d4d4d;
+}
+
+/* Element Plus Dropdown 黑色主题 */
+.el-dropdown-menu {
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+}
+
+.el-dropdown-menu__item {
+  color: #e0e0e0;
+}
+
+.el-dropdown-menu__item:hover {
+  background: #3d3d3d;
+  color: #ffffff;
+}
+
+/* Element Plus Popover 黑色主题 */
+.el-popover {
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+  color: #e0e0e0;
+}
+
+/* Element Plus Message Box 黑色主题 */
+.el-message-box {
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+}
+
+.el-message-box__title {
+  color: #ffffff;
+}
+
+.el-message-box__content {
+  color: #e0e0e0;
+}
+
+/* Element Plus Switch 黑色主题 */
+.el-switch {
+  --el-switch-off-color: #3d3d3d;
+}
+
+.el-switch__label {
+  color: #909399;
+}
+
+.el-switch__label.is-active {
+  color: #e0e0e0;
 }
 
 /* 响应式调整 */
