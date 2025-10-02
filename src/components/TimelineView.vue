@@ -825,6 +825,42 @@ const getTimelineCardStyle = (card) => {
   // 如果有设备信息，使用设备颜色作为左边框
   const deviceColor = card.device_name ? getDeviceColor(card.device_name) : color
 
+  // 计算卡片的水平位置和宽度
+  const column = card._column ?? 0
+  const totalColumns = card._totalColumns ?? 1
+
+  // 如果只有一列（没有重叠），占满宽度并左对齐
+  if (totalColumns === 1) {
+    return {
+      top: `${startPos}px`,
+      height: `${height}px`,
+      backgroundColor: color + '20', // 20%透明度
+      borderColor: color,
+      borderLeftColor: deviceColor, // 使用设备颜色作为左边框
+      borderLeftWidth: '4px',
+      left: '0',
+      width: '100%',
+      zIndex: 3
+    }
+  }
+
+  // 多列并列显示：第一列左对齐，其他列依次排列
+  // 每个卡片宽度根据总列数平均分配，留出间距
+  const gapPx = 8 // 列间距
+  const totalGapPx = (totalColumns - 1) * gapPx
+
+  // 计算可用宽度（假设容器宽度为100%，需要转换为calc）
+  // 每列宽度 = (100% - 总间距) / 列数
+  const columnWidthPercent = `calc((100% - ${totalGapPx}px) / ${totalColumns})`
+
+  // 计算左边距
+  // 第0列: 0
+  // 第1列: (100% - 总间距) / 列数 + 间距
+  // 第2列: 2 * ((100% - 总间距) / 列数 + 间距)
+  const leftPosition = column === 0
+    ? '0'
+    : `calc(${column} * ((100% - ${totalGapPx}px) / ${totalColumns} + ${gapPx}px))`
+
   return {
     top: `${startPos}px`,
     height: `${height}px`,
@@ -832,8 +868,8 @@ const getTimelineCardStyle = (card) => {
     borderColor: color,
     borderLeftColor: deviceColor, // 使用设备颜色作为左边框
     borderLeftWidth: '4px',
-    left: '0',
-    width: '100%',
+    left: leftPosition,
+    width: columnWidthPercent,
     zIndex: 3
   }
 }
