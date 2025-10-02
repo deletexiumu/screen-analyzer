@@ -38,6 +38,12 @@ pub enum SystemStatusCommand {
         error: Option<String>,
     },
 
+    /// 更新系统资源占用
+    UpdateSystemResources {
+        cpu_usage: f32,
+        memory_usage: f32,
+    },
+
     /// 获取状态
     Get {
         reply: oneshot::Sender<SystemStatus>,
@@ -103,6 +109,11 @@ impl SystemStatusActor {
                     self.status.last_error = error;
                 }
 
+                SystemStatusCommand::UpdateSystemResources { cpu_usage, memory_usage } => {
+                    self.status.cpu_usage = cpu_usage;
+                    self.status.memory_usage = memory_usage;
+                }
+
                 SystemStatusCommand::Get { reply } => {
                     let _ = reply.send(self.status.clone());
                 }
@@ -153,6 +164,14 @@ impl SystemStatusHandle {
     /// 设置错误信息
     pub async fn set_error(&self, error: Option<String>) {
         let _ = self.sender.send(SystemStatusCommand::SetError { error }).await;
+    }
+
+    /// 更新系统资源占用
+    pub async fn update_system_resources(&self, cpu_usage: f32, memory_usage: f32) {
+        let _ = self.sender.send(SystemStatusCommand::UpdateSystemResources {
+            cpu_usage,
+            memory_usage
+        }).await;
     }
 
     /// 获取系统状态

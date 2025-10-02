@@ -283,7 +283,22 @@ async fn remove_tag(
 /// 获取系统状态
 #[tauri::command]
 async fn get_system_status(state: tauri::State<'_, AppState>) -> Result<SystemStatus, String> {
-    let status = state.system_domain.get_status_handle().get().await;
+    let mut status = state.system_domain.get_status_handle().get().await;
+
+    // 获取存储统计信息
+    if let Ok(cleaner) = state.storage_domain.get_cleaner().await {
+        if let Ok(storage_stats) = cleaner.get_storage_stats().await {
+            status.storage_usage = StorageUsage {
+                database_size: storage_stats.database_size as u64,
+                frames_size: storage_stats.frames_size as u64,
+                videos_size: storage_stats.videos_size as u64,
+                total_size: storage_stats.total_size as u64,
+                session_count: storage_stats.session_count as u32,
+                frame_count: storage_stats.frame_count as u32,
+            };
+        }
+    }
+
     Ok(status)
 }
 
@@ -1854,6 +1869,59 @@ pub fn run() {
 
                         // 更新系统状态
                         state_clone.system_domain.get_status_handle().set_capturing(true).await;
+
+                        // 启动系统资源监控任务（每5秒更新一次CPU和内存占用率）
+                        {
+                            let system_state = state_clone.clone();
+                            tokio::spawn(async move {
+                                use sysinfo::{Pid, ProcessesToUpdate, System};
+
+                                let mut sys = System::new_all();
+                                let current_pid = Pid::from_u32(std::process::id());
+
+                                loop {
+                                    // 刷新指定进程信息
+                                    sys.refresh_processes(ProcessesToUpdate::Some(&[current_pid]));
+
+                                    // 等待一小段时间让CPU统计稳定
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+                                    // 再次刷新获取准确的CPU使用率
+                                    sys.refresh_processes(ProcessesToUpdate::Some(&[current_pid]));
+
+                                    let (cpu_usage, memory_mb) = if let Some(process) = sys.process(current_pid) {
+                                        // 获取当前进程的CPU使用率（单核百分比）
+                                        let cpu_single_core = process.cpu_usage();
+
+                                        // 获取CPU核心数
+                                        let cpu_count = sys.cpus().len() as f32;
+
+                                        // 计算总CPU占用率（所有核心的平均占用率）
+                                        let cpu_total = if cpu_count > 0.0 {
+                                            cpu_single_core / cpu_count
+                                        } else {
+                                            cpu_single_core
+                                        };
+
+                                        // 获取当前进程的内存使用（字节）转换为MB
+                                        let process_memory = process.memory();
+                                        let mem_mb = process_memory as f32 / (1024.0 * 1024.0);
+
+                                        (cpu_total, mem_mb)
+                                    } else {
+                                        (0.0, 0.0)
+                                    };
+
+                                    // 更新系统状态
+                                    system_state.system_domain.get_status_handle()
+                                        .update_system_resources(cpu_usage, memory_mb)
+                                        .await;
+
+                                    // 每5秒更新一次
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                }
+                            });
+                        }
 
                         info!("所有后台任务已启动");
 

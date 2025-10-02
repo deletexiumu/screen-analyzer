@@ -64,18 +64,14 @@
       <!-- 底部状态栏 -->
       <el-footer class="app-footer">
         <div class="footer-stats">
-          <span>会话数: {{ store.systemStatus.storage_usage.session_count }}</span>
+          <span>CPU: {{ store.systemStatus.cpu_usage?.toFixed(1) || 0 }}%</span>
           <el-divider direction="vertical" />
-          <span>帧数: {{ store.systemStatus.storage_usage.frame_count }}</span>
-          <el-divider direction="vertical" />
-          <span>存储: {{ store.formattedStorageUsage.total }}</span>
-          <el-divider direction="vertical" />
-          <span>保留天数: {{ store.appConfig.retention_days }}天</span>
+          <span>内存: {{ store.systemStatus.memory_usage?.toFixed(0) || 0 }}MB</span>
         </div>
         <div class="footer-info">
-          <span v-if="store.systemStatus.last_capture_time">
-            最后截屏: {{ formatTime(store.systemStatus.last_capture_time) }}
-          </span>
+          <span>视频: {{ store.formattedStorageUsage.videos }}</span>
+          <el-divider direction="vertical" />
+          <span>图片: {{ store.formattedStorageUsage.frames }}</span>
         </div>
       </el-footer>
     </el-container>

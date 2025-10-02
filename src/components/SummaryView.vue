@@ -55,7 +55,7 @@
             <span class="device-label">{{ device.name }}</span>
           </div>
           <div class="device-stat-time">{{ device.totalTime }}</div>
-          <div class="device-stat-screenshots">{{ device.screenshots }} 张截图</div>
+          <div class="device-stat-screenshots">{{ device.screenshots }} 个视频</div>
         </div>
       </div>
     </section>

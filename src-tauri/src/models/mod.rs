@@ -255,6 +255,10 @@ pub struct SystemStatus {
     pub storage_usage: StorageUsage,
     /// 错误信息
     pub last_error: Option<String>,
+    /// CPU占用率（百分比）
+    pub cpu_usage: f32,
+    /// 内存占用（MB）
+    pub memory_usage: f32,
 }
 
 impl Default for SystemStatus {
@@ -267,6 +271,8 @@ impl Default for SystemStatus {
             current_session_frames: 0,
             storage_usage: StorageUsage::default(),
             last_error: None,
+            cpu_usage: 0.0,
+            memory_usage: 0.0,
         }
     }
 }
