@@ -214,7 +214,7 @@ impl ScreenCapture {
 
     /// 捕获单个帧
     pub async fn capture_frame(&self) -> Result<ScreenFrame> {
-        let timestamp = Utc::now();
+        let timestamp = crate::storage::local_now();
 
         if self.screens.is_empty() {
             return Err(anyhow::anyhow!("未找到可用屏幕"));

@@ -192,6 +192,28 @@ impl LLMManager {
         self.provider.last_llm_call_id(call_type)
     }
 
+    /// 生成每日总结（调用LLM）
+    pub async fn generate_day_summary(
+        &self,
+        date: &str,
+        device_stats: &str,
+        parallel_work: &str,
+        usage_patterns: &str,
+        session_count: usize,
+        total_minutes: i64,
+    ) -> Result<String> {
+        self.provider
+            .generate_day_summary(
+                date,
+                device_stats,
+                parallel_work,
+                usage_patterns,
+                session_count,
+                total_minutes,
+            )
+            .await
+    }
+
     /// 分析视频并生成时间线（两阶段处理）
     pub async fn segment_video_and_generate_timeline(
         &mut self,
@@ -842,7 +864,7 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
                     start_timestamp: seg.start_timestamp.clone(),
                     end_timestamp: seg.end_timestamp.clone(),
                     description: seg.description.clone(),
-                    created_at: chrono::Utc::now(),
+                    created_at: crate::storage::local_now(),
                 })
                 .collect();
 
@@ -872,7 +894,7 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
                             .map(|d| serde_json::to_string(d).unwrap_or_default()),
                         app_sites: serde_json::to_string(&card.app_sites).unwrap_or_default(),
                         video_preview_path: video_path.clone(), // 使用已生成的视频路径
-                        created_at: chrono::Utc::now(),
+                        created_at: crate::storage::local_now(),
                     }
                 })
                 .collect();

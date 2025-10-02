@@ -78,7 +78,7 @@ impl StorageCleaner {
     /// 执行清理操作
     pub async fn perform_cleanup(&self) -> Result<()> {
         let retention_days = *self.retention_days.read().await;
-        let cutoff_date = Utc::now() - ChronoDuration::days(retention_days);
+        let cutoff_date = crate::storage::local_now() - ChronoDuration::days(retention_days);
         info!("开始清理 {} 之前的数据", cutoff_date.format("%Y-%m-%d"));
 
         // 1. 获取要删除的会话详情（包括关联的文件路径）

@@ -66,6 +66,17 @@ pub enum LLMCommand {
         reply: oneshot::Sender<Result<Vec<TimelineCard>>>,
     },
 
+    /// 生成每日总结
+    GenerateDaySummary {
+        date: String,
+        device_stats: String,
+        parallel_work: String,
+        usage_patterns: String,
+        session_count: usize,
+        total_minutes: i64,
+        reply: oneshot::Sender<Result<String>>,
+    },
+
     /// 健康检查（Ping）
     HealthCheck {
         reply: oneshot::Sender<()>,
@@ -143,6 +154,28 @@ impl LLMManagerActor {
                     reply,
                 } => {
                     let result = self.manager.generate_timeline(segments, previous_cards).await;
+                    let _ = reply.send(result);
+                }
+
+                LLMCommand::GenerateDaySummary {
+                    date,
+                    device_stats,
+                    parallel_work,
+                    usage_patterns,
+                    session_count,
+                    total_minutes,
+                    reply,
+                } => {
+                    let result = self.manager
+                        .generate_day_summary(
+                            &date,
+                            &device_stats,
+                            &parallel_work,
+                            &usage_patterns,
+                            session_count,
+                            total_minutes,
+                        )
+                        .await;
                     let _ = reply.send(result);
                 }
 
@@ -276,6 +309,32 @@ impl LLMHandle {
     ///
     /// 返回true表示Actor正常运行，false表示Actor无响应或已停止
     /// 超时时间为5秒
+    /// 生成每日总结
+    pub async fn generate_day_summary(
+        &self,
+        date: &str,
+        device_stats: &str,
+        parallel_work: &str,
+        usage_patterns: &str,
+        session_count: usize,
+        total_minutes: i64,
+    ) -> Result<String> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::GenerateDaySummary {
+                date: date.to_string(),
+                device_stats: device_stats.to_string(),
+                parallel_work: parallel_work.to_string(),
+                usage_patterns: usage_patterns.to_string(),
+                session_count,
+                total_minutes,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
     pub async fn health_check(&self) -> bool {
         let (reply, rx) = oneshot::channel();
 

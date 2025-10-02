@@ -371,7 +371,7 @@ impl VideoProcessor {
             match result {
                 Ok(video_result) => {
                     task.status = VideoTaskStatus::Completed;
-                    task.completed_at = Some(chrono::Utc::now());
+                    task.completed_at = Some(crate::storage::local_now());
                     results.push(Ok(video_result));
                 }
                 Err(e) => {

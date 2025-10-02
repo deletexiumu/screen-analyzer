@@ -118,6 +118,7 @@ impl MariaDbRepository {
             "llm_calls",
             "video_segments",
             "timeline_cards",
+            "day_summaries",
         ];
 
         for table in tables {
@@ -958,6 +959,27 @@ impl DatabaseRepository for MariaDbRepository {
         .execute(&self.pool)
         .await?;
 
+        // 创建每日总结表（缓存）
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS day_summaries (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                date DATE NOT NULL UNIQUE,
+                summary_text TEXT NOT NULL,
+                device_stats TEXT NOT NULL,
+                parallel_work TEXT NOT NULL,
+                usage_patterns TEXT NOT NULL,
+                active_device_count INT NOT NULL,
+                llm_call_id BIGINT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (llm_call_id) REFERENCES llm_calls(id) ON DELETE SET NULL
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // 创建额外的索引（忽略已存在错误）
         let _ = sqlx::query("CREATE INDEX idx_llm_calls_session_id ON llm_calls(session_id)")
             .execute(&self.pool)
@@ -976,7 +998,142 @@ impl DatabaseRepository for MariaDbRepository {
         Ok(())
     }
 
+    async fn save_day_summary(&self, date: &str, summary: &DaySummaryRecord) -> Result<()> {
+        // 使用 REPLACE INTO 实现 upsert (MariaDB/MySQL 语法)
+        sqlx::query(
+            r#"
+            REPLACE INTO day_summaries (
+                date, summary_text, device_stats, parallel_work, usage_patterns,
+                active_device_count, llm_call_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+            "#,
+        )
+        .bind(date)
+        .bind(&summary.summary_text)
+        .bind(&summary.device_stats)
+        .bind(&summary.parallel_work)
+        .bind(&summary.usage_patterns)
+        .bind(summary.active_device_count)
+        .bind(summary.llm_call_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_day_summary(&self, date: &str) -> Result<Option<DaySummaryRecord>> {
+        let result = sqlx::query_as::<_, DaySummaryRecord>(
+            r#"
+            SELECT * FROM day_summaries WHERE date = ?
+            "#,
+        )
+        .bind(date)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(result)
+    }
+
+    async fn delete_day_summary(&self, date: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            DELETE FROM day_summaries WHERE date = ?
+            "#,
+        )
+        .bind(date)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     fn db_type(&self) -> &str {
         "mariadb"
+    }
+
+    async fn migrate_timezone_to_local(&self) -> Result<(u64, u64, u64, u64, u64, u64)> {
+        use chrono::Local;
+
+        // 计算时区偏移量（小时）
+        let local_offset = Local::now().offset().local_minus_utc() / 3600;
+
+        info!("开始时区迁移：将 UTC 时间转换为本地时间（偏移 {} 小时）", local_offset);
+
+        // 更新 sessions 表
+        let sessions_updated = sqlx::query(
+            "UPDATE sessions SET
+             start_time = DATE_ADD(start_time, INTERVAL ? HOUR),
+             end_time = DATE_ADD(end_time, INTERVAL ? HOUR),
+             created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
+        )
+        .bind(local_offset)
+        .bind(local_offset)
+        .bind(local_offset)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 frames 表
+        let frames_updated = sqlx::query(
+            "UPDATE frames SET timestamp = DATE_ADD(timestamp, INTERVAL ? HOUR)"
+        )
+        .bind(local_offset)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 llm_calls 表
+        let llm_calls_updated = sqlx::query(
+            "UPDATE llm_calls SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
+        )
+        .bind(local_offset)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 video_segments 表
+        let video_segments_updated = sqlx::query(
+            "UPDATE video_segments SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
+        )
+        .bind(local_offset)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 timeline_cards 表
+        let timeline_cards_updated = sqlx::query(
+            "UPDATE timeline_cards SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
+        )
+        .bind(local_offset)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 day_summaries 表
+        let day_summaries_updated = sqlx::query(
+            "UPDATE day_summaries SET
+             created_at = DATE_ADD(created_at, INTERVAL ? HOUR),
+             updated_at = DATE_ADD(updated_at, INTERVAL ? HOUR)"
+        )
+        .bind(local_offset)
+        .bind(local_offset)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        info!(
+            "时区迁移完成：sessions={}, frames={}, llm_calls={}, video_segments={}, timeline_cards={}, day_summaries={}",
+            sessions_updated, frames_updated, llm_calls_updated,
+            video_segments_updated, timeline_cards_updated, day_summaries_updated
+        );
+
+        Ok((
+            sessions_updated,
+            frames_updated,
+            llm_calls_updated,
+            video_segments_updated,
+            timeline_cards_updated,
+            day_summaries_updated,
+        ))
     }
 }

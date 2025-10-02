@@ -526,7 +526,7 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
             error_message: None,
             latency_ms: None,
             token_usage: None,
-            created_at: chrono::Utc::now(),
+            created_at: crate::storage::local_now(),
         };
 
         let endpoint = self.base_url.clone();
@@ -689,7 +689,7 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
             error_message: None,
             latency_ms: None,
             token_usage: None,
-            created_at: chrono::Utc::now(),
+            created_at: crate::storage::local_now(),
         };
 
         let endpoint = self.base_url.clone();
@@ -1018,7 +1018,7 @@ impl LLMProvider for QwenProvider {
         let parsed: serde_json::Value = serde_json::from_str(json_str)?;
 
         // 转换为SessionSummary
-        let now = Utc::now();
+        let now = crate::storage::local_now();
         Ok(SessionSummary {
             title: parsed["title"].as_str().unwrap_or("未命名会话").to_string(),
             summary: parsed["summary"].as_str().unwrap_or("").to_string(),
@@ -1221,6 +1221,95 @@ impl LLMProvider for QwenProvider {
                 "gif".to_string(),
                 "webp".to_string(),
             ],
+        }
+    }
+
+    /// 生成每日总结文本（使用LLM）
+    async fn generate_day_summary(
+        &self,
+        date: &str,
+        device_stats: &str,
+        parallel_work: &str,
+        usage_patterns: &str,
+        session_count: usize,
+        total_minutes: i64,
+    ) -> Result<String> {
+        let api_key = self.api_key.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Qwen API Key未配置")
+        })?;
+
+        // 构建提示词
+        let prompt = format!(
+            r#"根据以下数据，生成一份简洁的每日工作总结（2-3句话，使用中文）：
+
+日期: {}
+会话数: {}
+总时长: {} 分钟
+
+设备统计:
+{}
+
+并行工作:
+{}
+
+使用模式:
+{}
+
+要求：
+1. 使用中文，语气自然、专业
+2. 用2-3句话概括今天的主要活动
+3. 突出重点数据（如主要活动、时长、设备等）
+4. 保持简洁，不要超过80字
+5. 使用类似这样的格式："今天共记录了X个工作会话，使用了Y台设备。主要活动集中在Z领域，总计H小时M分钟。"
+
+请直接返回总结文本（只要中文总结，不要其他说明）。"#,
+            date,
+            session_count,
+            total_minutes,
+            device_stats,
+            parallel_work,
+            usage_patterns
+        );
+
+        info!("使用Qwen生成每日总结: {}", date);
+
+        // 调用API
+        let request_body = json!({
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 200
+        });
+
+        let response = self
+            .client
+            .post(&self.base_url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            error!("Qwen API 错误: {} - {}", status, error_text);
+            return Err(anyhow::anyhow!("Qwen API 请求失败: {}", error_text));
+        }
+
+        let result: QwenResponse = response.json().await?;
+
+        if let Some(choice) = result.choices.first() {
+            let summary = choice.message.content.trim().to_string();
+            info!("生成的每日总结: {}", summary);
+            Ok(summary)
+        } else {
+            Err(anyhow::anyhow!("Qwen API 返回空结果"))
         }
     }
 }

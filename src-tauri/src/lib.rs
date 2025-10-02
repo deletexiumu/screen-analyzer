@@ -123,6 +123,23 @@ async fn get_day_sessions(
         .map_err(|e| e.to_string())
 }
 
+/// 获取某天的总结数据
+///
+/// # 参数
+/// * `date` - 日期 (YYYY-MM-DD)
+/// * `force_refresh` - 是否强制重新生成（默认 false，使用缓存）
+#[tauri::command]
+async fn get_day_summary(
+    state: tauri::State<'_, AppState>,
+    date: String,
+    force_refresh: Option<bool>,
+) -> Result<domains::summary::DaySummary, String> {
+    let db = state.storage_domain.get_db().await?;
+    let llm_handle = state.analysis_domain.get_llm_handle();
+    let generator = domains::summary::SummaryGenerator::with_llm(db, llm_handle.clone());
+    generator.generate_day_summary(&date, force_refresh.unwrap_or(false)).await
+}
+
 /// 获取会话详情
 #[tauri::command]
 async fn get_session_detail(
@@ -378,7 +395,7 @@ async fn retry_session_analysis(
     let last_error = result.as_ref().err().cloned();
 
     state.system_domain.get_status_handle().set_processing(false).await;
-    state.system_domain.get_status_handle().update_last_process_time(chrono::Utc::now()).await;
+    state.system_domain.get_status_handle().update_last_process_time(storage::local_now()).await;
     state.system_domain.get_status_handle().set_error(last_error.clone()).await;
 
     match result {
@@ -604,7 +621,7 @@ async fn test_generate_videos(
     use std::collections::BTreeMap;
 
     let frames_dir = state.capture_domain.get_capture().frames_dir();
-    let now = Utc::now();
+    let now = storage::local_now();
 
     let mut dir = tokio::fs::read_dir(&frames_dir)
         .await
@@ -790,6 +807,34 @@ async fn get_storage_stats(
         .get_storage_stats()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 迁移数据库时区：将 UTC 时间转换为本地时间
+#[tauri::command]
+async fn migrate_timezone_to_local(
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    info!("开始数据库时区迁移");
+
+    let db = state.storage_domain.get_db().await?;
+    let (sessions, frames, llm_calls, video_segments, timeline_cards, day_summaries) =
+        db.migrate_timezone_to_local()
+            .await
+            .map_err(|e| format!("时区迁移失败: {}", e))?;
+
+    let message = format!(
+        "时区迁移完成！\n\
+         - 会话记录: {} 条\n\
+         - 帧记录: {} 条\n\
+         - LLM 调用记录: {} 条\n\
+         - 视频分段记录: {} 条\n\
+         - 时间线卡片: {} 条\n\
+         - 每日总结: {} 条",
+        sessions, frames, llm_calls, video_segments, timeline_cards, day_summaries
+    );
+
+    info!("{}", message);
+    Ok(message)
 }
 
 /// 刷新历史数据的设备信息
@@ -1135,7 +1180,7 @@ async fn regenerate_timeline(
                         ),
                         app_sites: serde_json::to_string(&card.app_sites).unwrap_or_default(),
                         video_preview_path: None,
-                        created_at: chrono::Utc::now(),
+                        created_at: storage::local_now(),
                     }
                 })
                 .collect();
@@ -1839,6 +1884,7 @@ pub fn run() {
             get_database_status,
             get_activities,
             get_day_sessions,
+            get_day_summary,
             get_session_detail,
             get_app_config,
             update_config,
@@ -1853,6 +1899,7 @@ pub fn run() {
             test_generate_videos,
             cleanup_storage,
             get_storage_stats,
+            migrate_timezone_to_local,
             refresh_device_info,
             sync_data_to_mariadb,
             configure_qwen,
@@ -1931,7 +1978,7 @@ async fn analyze_video_once(
         return Err(e.to_string());
     }
 
-    let now = Utc::now();
+    let now = storage::local_now();
 
     // 准备会话
     let db = state.storage_domain.get_db().await?;
@@ -2191,7 +2238,7 @@ async fn analyze_unprocessed_videos(
 
         let (session_start, session_end) = parse_video_window_from_stem(video_filename)
             .unwrap_or_else(|| {
-                let end = chrono::Utc::now();
+                let end = storage::local_now();
                 (end - chrono::Duration::minutes(15), end)
             });
 
@@ -2255,7 +2302,7 @@ async fn analyze_unprocessed_videos(
     if mark_status {
         state.system_domain.get_status_handle().set_processing(false).await;
     }
-    state.system_domain.get_status_handle().update_last_process_time(chrono::Utc::now()).await;
+    state.system_domain.get_status_handle().update_last_process_time(storage::local_now()).await;
     state.system_domain.get_status_handle().set_error(processing_error.clone()).await;
 
     if let Some(err) = processing_error {

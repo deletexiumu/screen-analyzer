@@ -352,11 +352,30 @@ impl DatabaseRepository for CachedRepository {
         self.inner.get_analyzed_video_paths().await
     }
 
+    async fn save_day_summary(&self, date: &str, summary: &DaySummaryRecord) -> Result<()> {
+        self.inner.save_day_summary(date, summary).await
+    }
+
+    async fn get_day_summary(&self, date: &str) -> Result<Option<DaySummaryRecord>> {
+        self.inner.get_day_summary(date).await
+    }
+
+    async fn delete_day_summary(&self, date: &str) -> Result<()> {
+        self.inner.delete_day_summary(date).await
+    }
+
     async fn initialize_tables(&self) -> Result<()> {
         self.inner.initialize_tables().await
     }
 
     fn db_type(&self) -> &str {
         self.inner.db_type()
+    }
+
+    async fn migrate_timezone_to_local(&self) -> Result<(u64, u64, u64, u64, u64, u64)> {
+        // 清空所有缓存，因为时间数据已改变
+        self.clear_cache().await;
+        // 委托给内部实现
+        self.inner.migrate_timezone_to_local().await
     }
 }

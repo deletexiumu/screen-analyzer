@@ -369,4 +369,25 @@ impl Database {
         info!("数据同步完成！");
         Ok(())
     }
+
+    // ========== 每日总结操作 ==========
+
+    pub async fn save_day_summary(&self, date: &str, summary: &DaySummaryRecord) -> Result<()> {
+        self.repository.save_day_summary(date, summary).await
+    }
+
+    pub async fn get_day_summary(&self, date: &str) -> Result<Option<DaySummaryRecord>> {
+        self.repository.get_day_summary(date).await
+    }
+
+    pub async fn delete_day_summary(&self, date: &str) -> Result<()> {
+        self.repository.delete_day_summary(date).await
+    }
+
+    // ========== 数据库维护操作 ==========
+
+    /// 迁移数据库时区：将 UTC 时间转换为本地时间
+    pub async fn migrate_timezone_to_local(&self) -> Result<(u64, u64, u64, u64, u64, u64)> {
+        self.repository.migrate_timezone_to_local().await
+    }
 }

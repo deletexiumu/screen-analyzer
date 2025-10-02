@@ -76,14 +76,14 @@ impl SystemStatusActor {
                 SystemStatusCommand::UpdateCapturing { is_capturing } => {
                     self.status.is_capturing = is_capturing;
                     if is_capturing {
-                        self.status.last_capture_time = Some(Utc::now());
+                        self.status.last_capture_time = Some(crate::storage::local_now());
                     }
                 }
 
                 SystemStatusCommand::UpdateProcessing { is_processing } => {
                     self.status.is_processing = is_processing;
                     if is_processing {
-                        self.status.last_process_time = Some(Utc::now());
+                        self.status.last_process_time = Some(crate::storage::local_now());
                     }
                 }
 

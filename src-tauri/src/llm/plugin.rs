@@ -538,7 +538,7 @@ pub struct SessionSummary {
 
 impl Default for SessionSummary {
     fn default() -> Self {
-        let now = Utc::now();
+        let now = crate::storage::local_now();
         Self {
             title: "未命名会话".to_string(),
             summary: "".to_string(),
@@ -634,6 +634,34 @@ pub trait LLMProvider: Send + Sync + std::any::Any {
     /// 获取支持的功能
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// 生成每日总结文本
+    ///
+    /// # 参数
+    /// * `date` - 日期 (YYYY-MM-DD)
+    /// * `device_stats` - 设备统计数据
+    /// * `parallel_work` - 并行工作数据
+    /// * `usage_patterns` - 使用模式数据
+    /// * `session_count` - 会话数量
+    /// * `total_minutes` - 总时长（分钟）
+    ///
+    /// # 返回
+    /// * 生成的总结文本
+    async fn generate_day_summary(
+        &self,
+        _date: &str,
+        _device_stats: &str,
+        _parallel_work: &str,
+        _usage_patterns: &str,
+        _session_count: usize,
+        _total_minutes: i64,
+    ) -> Result<String> {
+        // 默认实现：返回简单的基于规则的总结
+        Ok(format!(
+            "Today you had {} sessions with {} minutes of tracked activity.",
+            _session_count, _total_minutes
+        ))
     }
 }
 

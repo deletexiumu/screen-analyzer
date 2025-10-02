@@ -249,7 +249,7 @@ impl CaptureScheduler {
             return Ok(());
         }
 
-        let now_ms = Utc::now().timestamp_millis();
+        let now_ms = crate::storage::local_now().timestamp_millis();
         let cutoff_ms = now_ms - 30_000; // 留出缓冲，避免处理仍在写入的区间
 
         for (bucket_start_ms, mut frames) in grouped.into_iter() {

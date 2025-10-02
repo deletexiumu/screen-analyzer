@@ -128,6 +128,17 @@ pub trait DatabaseRepository: Send + Sync {
     /// 获取已分析的视频路径列表
     async fn get_analyzed_video_paths(&self) -> Result<Vec<String>>;
 
+    // ========== 每日总结 ==========
+
+    /// 保存每日总结（插入或更新）
+    async fn save_day_summary(&self, date: &str, summary: &DaySummaryRecord) -> Result<()>;
+
+    /// 获取某一天的总结
+    async fn get_day_summary(&self, date: &str) -> Result<Option<DaySummaryRecord>>;
+
+    /// 删除某一天的总结
+    async fn delete_day_summary(&self, date: &str) -> Result<()>;
+
     // ========== 数据库初始化和元数据 ==========
 
     /// 初始化数据库表结构
@@ -135,4 +146,12 @@ pub trait DatabaseRepository: Send + Sync {
 
     /// 获取数据库类型标识
     fn db_type(&self) -> &str;
+
+    /// 迁移时间字段：将 UTC 时间转换为本地时间格式存储
+    ///
+    /// 此方法用于将旧的 UTC 时间数据迁移为本地时间格式。
+    /// 它会将所有时间字段加上时区偏移量，使数据库中显示的时间为本地时间。
+    ///
+    /// 返回值：(更新的会话数, 更新的帧数, 更新的 LLM 调用数, 更新的视频分段数, 更新的时间线卡片数, 更新的每日总结数)
+    async fn migrate_timezone_to_local(&self) -> Result<(u64, u64, u64, u64, u64, u64)>;
 }

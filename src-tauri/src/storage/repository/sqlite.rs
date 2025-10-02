@@ -785,6 +785,27 @@ impl DatabaseRepository for SqliteRepository {
         .execute(&self.pool)
         .await?;
 
+        // 创建每日总结表（缓存）
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS day_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date DATE NOT NULL UNIQUE,
+                summary_text TEXT NOT NULL,
+                device_stats TEXT NOT NULL,
+                parallel_work TEXT NOT NULL,
+                usage_patterns TEXT NOT NULL,
+                active_device_count INTEGER NOT NULL,
+                llm_call_id INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (llm_call_id) REFERENCES llm_calls(id) ON DELETE SET NULL
+            )
+        "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // 创建额外的索引
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_llm_calls_session_id ON llm_calls(session_id)")
             .execute(&self.pool)
@@ -835,7 +856,143 @@ impl DatabaseRepository for SqliteRepository {
         Ok(())
     }
 
+    async fn save_day_summary(&self, date: &str, summary: &DaySummaryRecord) -> Result<()> {
+        // 使用 INSERT OR REPLACE 实现 upsert
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO day_summaries (
+                date, summary_text, device_stats, parallel_work, usage_patterns,
+                active_device_count, llm_call_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            "#,
+        )
+        .bind(date)
+        .bind(&summary.summary_text)
+        .bind(&summary.device_stats)
+        .bind(&summary.parallel_work)
+        .bind(&summary.usage_patterns)
+        .bind(summary.active_device_count)
+        .bind(summary.llm_call_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_day_summary(&self, date: &str) -> Result<Option<DaySummaryRecord>> {
+        let result = sqlx::query_as::<_, DaySummaryRecord>(
+            r#"
+            SELECT * FROM day_summaries WHERE date = ?
+            "#,
+        )
+        .bind(date)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(result)
+    }
+
+    async fn delete_day_summary(&self, date: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            DELETE FROM day_summaries WHERE date = ?
+            "#,
+        )
+        .bind(date)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     fn db_type(&self) -> &str {
         "sqlite"
+    }
+
+    async fn migrate_timezone_to_local(&self) -> Result<(u64, u64, u64, u64, u64, u64)> {
+        use chrono::Local;
+
+        // 计算时区偏移量（秒）
+        let local_offset_seconds = Local::now().offset().local_minus_utc();
+
+        info!("开始时区迁移：将 UTC 时间转换为本地时间（偏移 {} 秒 / {} 小时）",
+              local_offset_seconds, local_offset_seconds / 3600);
+
+        // SQLite 使用 datetime() 函数和字符串偏移
+        let offset_str = format!("{} seconds", local_offset_seconds);
+
+        // 更新 sessions 表
+        let sessions_updated = sqlx::query(&format!(
+            "UPDATE sessions SET
+             start_time = datetime(start_time, '{}'),
+             end_time = datetime(end_time, '{}'),
+             created_at = datetime(created_at, '{}')",
+            offset_str, offset_str, offset_str
+        ))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 frames 表
+        let frames_updated = sqlx::query(&format!(
+            "UPDATE frames SET timestamp = datetime(timestamp, '{}')",
+            offset_str
+        ))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 llm_calls 表
+        let llm_calls_updated = sqlx::query(&format!(
+            "UPDATE llm_calls SET created_at = datetime(created_at, '{}')",
+            offset_str
+        ))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 video_segments 表
+        let video_segments_updated = sqlx::query(&format!(
+            "UPDATE video_segments SET created_at = datetime(created_at, '{}')",
+            offset_str
+        ))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 timeline_cards 表
+        let timeline_cards_updated = sqlx::query(&format!(
+            "UPDATE timeline_cards SET created_at = datetime(created_at, '{}')",
+            offset_str
+        ))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        // 更新 day_summaries 表
+        let day_summaries_updated = sqlx::query(&format!(
+            "UPDATE day_summaries SET
+             created_at = datetime(created_at, '{}'),
+             updated_at = datetime(updated_at, '{}')",
+            offset_str, offset_str
+        ))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        info!(
+            "时区迁移完成：sessions={}, frames={}, llm_calls={}, video_segments={}, timeline_cards={}, day_summaries={}",
+            sessions_updated, frames_updated, llm_calls_updated,
+            video_segments_updated, timeline_cards_updated, day_summaries_updated
+        );
+
+        Ok((
+            sessions_updated,
+            frames_updated,
+            llm_calls_updated,
+            video_segments_updated,
+            timeline_cards_updated,
+            day_summaries_updated,
+        ))
     }
 }

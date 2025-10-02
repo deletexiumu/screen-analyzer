@@ -1,7 +1,13 @@
 // 数据模型定义 - 数据库实体结构
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
+
+/// 获取当前本地时间（以 DateTime<Utc> 类型表示，但值为本地时间）
+/// 用于将本地时间存储到数据库中
+pub fn local_now() -> DateTime<Utc> {
+    Local::now().naive_local().and_utc()
+}
 
 /// 会话数据结构
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -92,4 +98,38 @@ pub struct TimelineCardRecord {
     pub app_sites: String,                  // JSON格式的应用/网站信息
     pub video_preview_path: Option<String>, // 本地视频文件路径
     pub created_at: DateTime<Utc>,
+}
+
+/// 每日总结记录
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DaySummaryRecord {
+    pub id: Option<i64>,
+    #[serde(serialize_with = "serialize_naive_date", deserialize_with = "deserialize_naive_date")]
+    pub date: chrono::NaiveDate,       // 日期
+    pub summary_text: String,          // LLM 生成的总结文本
+    pub device_stats: String,          // JSON 格式的设备统计
+    pub parallel_work: String,         // JSON 格式的并行工作
+    pub usage_patterns: String,        // JSON 格式的使用模式
+    pub active_device_count: i32,      // 活跃设备数量
+    pub llm_call_id: Option<i64>,      // 关联的 LLM 调用记录
+    pub created_at: DateTime<Utc>,     // 创建时间
+    pub updated_at: DateTime<Utc>,     // 更新时间
+}
+
+// 自定义序列化：NaiveDate -> String (YYYY-MM-DD)
+fn serialize_naive_date<S>(date: &chrono::NaiveDate, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&date.format("%Y-%m-%d").to_string())
+}
+
+// 自定义反序列化：String (YYYY-MM-DD) -> NaiveDate
+fn deserialize_naive_date<'de, D>(deserializer: D) -> Result<chrono::NaiveDate, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+        .map_err(serde::de::Error::custom)
 }

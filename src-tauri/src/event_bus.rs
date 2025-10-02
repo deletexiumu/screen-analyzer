@@ -164,8 +164,8 @@ mod tests {
         bus.publish(AppEvent::SessionCompleted {
             session_id: 1,
             frame_count: 10,
-            window_start: Utc::now(),
-            window_end: Utc::now(),
+            window_start: crate::storage::local_now(),
+            window_end: crate::storage::local_now(),
         });
 
         // 两个订阅者都应该收到事件
