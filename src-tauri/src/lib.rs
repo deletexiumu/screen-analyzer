@@ -8,6 +8,7 @@ pub mod event_bus;
 pub mod llm;
 pub mod logger;
 pub mod models;
+pub mod notion;
 pub mod settings;
 pub mod storage;
 pub mod video;
@@ -970,6 +971,7 @@ async fn configure_llm_provider(
         llm_config: Some(llm_provider_config),
         logger_settings: None,
         database_config: None,
+        notion_config: None,
     };
 
     state
@@ -1469,6 +1471,101 @@ async fn test_anthropic_text_api(config: serde_json::Value) -> Result<String, St
     Ok(content.to_string())
 }
 
+/// 测试 Notion API 连接
+#[tauri::command]
+async fn test_notion_connection(
+    _state: tauri::State<'_, AppState>,
+    api_token: String,
+) -> Result<String, String> {
+    info!("测试 Notion API 连接");
+
+    // 创建临时配置用于测试
+    let temp_config = models::NotionConfig {
+        enabled: true,
+        api_token: api_token.clone(),
+        database_id: String::new(), // 测试时不需要
+        sync_options: Default::default(),
+        max_retries: 3,
+    };
+
+    // 创建临时客户端测试连接
+    let temp_client = notion::NotionClient::new(temp_config)
+        .map_err(|e| e.to_string())?;
+
+    // 测试连接 - 搜索一下用户空间看是否有权限
+    temp_client.search_pages()
+        .await
+        .map(|pages| format!("连接成功！可以访问 {} 个页面/数据库", pages.len()))
+        .map_err(|e| e.to_string())
+}
+
+/// 更新 Notion 配置
+#[tauri::command]
+async fn update_notion_config(
+    state: tauri::State<'_, AppState>,
+    config: models::NotionConfig,
+) -> Result<(), String> {
+    info!("更新 Notion 配置");
+
+    // 保存配置到设置文件
+    let update = AppConfig {
+        notion_config: Some(config.clone()),
+        ..Default::default()
+    };
+
+    state
+        .storage_domain
+        .get_settings()
+        .update(update)
+        .await
+        .map_err(|e| format!("保存配置失败: {}", e))?;
+
+    // 重新初始化 Notion 客户端
+    state
+        .storage_domain
+        .get_notion_manager()
+        .initialize(config)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    info!("Notion 配置已保存并应用");
+    Ok(())
+}
+
+/// 搜索 Notion 页面和数据库
+#[tauri::command]
+async fn search_notion_pages(
+    state: tauri::State<'_, AppState>,
+    api_token: String,
+) -> Result<Vec<notion::NotionPage>, String> {
+    info!("搜索 Notion 页面和数据库");
+
+    state
+        .storage_domain
+        .get_notion_manager()
+        .search_pages(&api_token)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 在指定页面下创建 Notion 数据库
+#[tauri::command]
+async fn create_notion_database(
+    state: tauri::State<'_, AppState>,
+    api_token: String,
+    parent_page_id: String,
+    database_name: String,
+) -> Result<String, String> {
+    info!("在页面 {} 下创建数据库: {}", parent_page_id, database_name);
+
+    state
+        .storage_domain
+        .get_notion_manager()
+        .create_database(&api_token, &parent_page_id, &database_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ==================== 辅助函数 ====================
 
 /// 处理历史图片，生成视频并清理
@@ -1805,14 +1902,28 @@ pub fn run() {
                             }
                         }
 
+                        // 初始化 Notion 集成
+                        let config = state_clone.storage_domain.get_settings().get().await;
+                        if let Some(notion_config) = config.notion_config {
+                            if notion_config.enabled {
+                                if let Err(e) = state_clone.storage_domain.get_notion_manager()
+                                    .initialize(notion_config).await {
+                                    error!("Notion 初始化失败: {}", e);
+                                } else {
+                                    info!("Notion 集成已初始化");
+                                }
+                            }
+                        }
+
                         // 仅在数据库就绪时启动依赖数据库的组件
                         if let Some(db) = state_clone.storage_domain.try_get_db().await {
-                            // 创建LLMProcessor并启动事件监听器
-                            let llm_processor = Arc::new(llm::LLMProcessor::with_video_processor(
+                            // 创建LLMProcessor并启动事件监听器（包含 Notion 支持）
+                            let llm_processor = Arc::new(llm::LLMProcessor::with_video_and_notion(
                                 state_clone.analysis_domain.get_llm_handle().clone(),
                                 db.clone(),
                                 state_clone.analysis_domain.get_video_processor().clone(),
                                 state_clone.storage_domain.get_settings().clone(),
+                                state_clone.storage_domain.get_notion_manager().clone(),
                             ));
 
                             // 启动LLM处理器事件监听器
@@ -1980,6 +2091,10 @@ pub fn run() {
             open_storage_folder,
             get_log_dir,
             open_log_folder,
+            test_notion_connection,
+            update_notion_config,
+            search_notion_pages,
+            create_notion_database,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

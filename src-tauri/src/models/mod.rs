@@ -8,7 +8,7 @@ pub use crate::llm::plugin::{ActivityCategory, ActivityTag, KeyMoment};
 pub use crate::storage::{Activity, DatabaseConfig, Frame, Session, SessionDetail};
 
 /// 应用配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     /// 数据保留天数
     pub retention_days: Option<i64>,
@@ -30,6 +30,8 @@ pub struct AppConfig {
     pub logger_settings: Option<LoggerSettings>,
     /// 数据库配置
     pub database_config: Option<DatabaseConfig>,
+    /// Notion 配置
+    pub notion_config: Option<NotionConfig>,
 }
 
 /// 日志设置
@@ -158,6 +160,8 @@ pub struct PersistedAppConfig {
     pub logger_settings: Option<LoggerSettings>,
     /// 数据库配置
     pub database_config: Option<DatabaseConfig>,
+    /// Notion 配置
+    pub notion_config: Option<NotionConfig>,
 }
 
 impl Default for PersistedAppConfig {
@@ -173,6 +177,7 @@ impl Default for PersistedAppConfig {
             capture_settings: Some(CaptureSettings::default()),
             logger_settings: Some(LoggerSettings::default()),
             database_config: None,
+            notion_config: Some(NotionConfig::default()),
         }
     }
 }
@@ -476,4 +481,58 @@ pub enum NotificationType {
 pub struct NotificationAction {
     pub label: String,
     pub action: String,
+}
+
+/// Notion 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotionConfig {
+    /// 是否启用 Notion 同步
+    pub enabled: bool,
+    /// Notion API Token (Integration Secret)
+    pub api_token: String,
+    /// Notion Database ID - 存储会话记录
+    pub database_id: String,
+    /// 同步内容选项
+    pub sync_options: NotionSyncOptions,
+    /// 失败重试次数
+    pub max_retries: u32,
+}
+
+impl Default for NotionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_token: String::new(),
+            database_id: String::new(),
+            sync_options: NotionSyncOptions::default(),
+            max_retries: 3,
+        }
+    }
+}
+
+/// Notion 同步选项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotionSyncOptions {
+    /// 同步会话记录
+    pub sync_sessions: bool,
+    /// 同步视频文件（小于5MB直接上传，大于5MB仅上传链接）
+    pub sync_videos: bool,
+    /// 同步每日总结
+    pub sync_daily_summary: bool,
+    /// 同步关键截图
+    pub sync_screenshots: bool,
+    /// 视频大小限制（MB）
+    pub video_size_limit_mb: u32,
+}
+
+impl Default for NotionSyncOptions {
+    fn default() -> Self {
+        Self {
+            sync_sessions: true,
+            sync_videos: false, // 默认不同步视频（文件较大）
+            sync_daily_summary: false, // 默认不同步每日总结（Notion 会自动总结）
+            sync_screenshots: true,
+            video_size_limit_mb: 5,
+        }
+    }
 }

@@ -467,6 +467,7 @@ pub struct LLMProcessor {
     db: Arc<crate::storage::Database>,
     video_processor: Option<Arc<crate::video::VideoProcessor>>,
     settings: Arc<SettingsManager>,
+    notion_manager: Option<Arc<crate::notion::NotionManager>>,
 }
 
 /// LLM两阶段分析的聚合结果
@@ -488,6 +489,7 @@ impl LLMProcessor {
             db,
             video_processor: None,
             settings,
+            notion_manager: None,
         }
     }
 
@@ -502,6 +504,24 @@ impl LLMProcessor {
             db,
             video_processor: Some(video_processor),
             settings,
+            notion_manager: None,
+        }
+    }
+
+    /// 创建带视频处理器和 Notion 管理器的 LLMProcessor
+    pub fn with_video_and_notion(
+        llm_handle: crate::actors::LLMHandle,
+        db: Arc<crate::storage::Database>,
+        video_processor: Arc<crate::video::VideoProcessor>,
+        settings: Arc<SettingsManager>,
+        notion_manager: Arc<crate::notion::NotionManager>,
+    ) -> Self {
+        Self {
+            llm_handle,
+            db,
+            video_processor: Some(video_processor),
+            settings,
+            notion_manager: Some(notion_manager),
         }
     }
 
@@ -925,6 +945,17 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
             "会话已保存到数据库: ID={}, 标题={}",
             session_id, summary.title
         );
+
+        // 异步同步到 Notion（不阻塞主流程）
+        if let Some(notion_manager) = &self.notion_manager {
+            if notion_manager.is_enabled().await {
+                // 获取完整的会话信息
+                if let Ok(session) = self.db.get_session(session_id).await {
+                    info!("触发 Notion 同步：会话 {}", session_id);
+                    notion_manager.sync_session_async(session).await;
+                }
+            }
+        }
 
         // 清理provider的视频路径，避免影响后续会话
         self.llm_handle.set_video_path(None).await?;

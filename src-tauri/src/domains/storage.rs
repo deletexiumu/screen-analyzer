@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 use crate::storage::database::Database;
 use crate::storage::cleaner::StorageCleaner;
 use crate::settings::SettingsManager;
+use crate::notion::NotionManager;
 
 /// 数据库初始化状态
 #[derive(Clone, serde::Serialize)]
@@ -31,6 +32,8 @@ pub struct StorageDomain {
     cleaner: Arc<RwLock<Option<Arc<StorageCleaner>>>>,
     /// 设置管理器
     settings: Arc<SettingsManager>,
+    /// Notion 同步管理器
+    notion_manager: Arc<NotionManager>,
 }
 
 impl StorageDomain {
@@ -41,6 +44,7 @@ impl StorageDomain {
             db_status: Arc::new(RwLock::new(DatabaseStatus::Initializing)),
             cleaner: Arc::new(RwLock::new(None)),
             settings,
+            notion_manager: Arc::new(NotionManager::new()),
         }
     }
 
@@ -164,5 +168,10 @@ impl StorageDomain {
     /// 获取设置管理器
     pub fn get_settings(&self) -> &Arc<SettingsManager> {
         &self.settings
+    }
+
+    /// 获取 Notion 管理器
+    pub fn get_notion_manager(&self) -> &Arc<NotionManager> {
+        &self.notion_manager
     }
 }

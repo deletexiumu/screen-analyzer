@@ -71,6 +71,9 @@ impl SettingsManager {
         if let Some(db) = update.database_config {
             config.database_config = Some(db);
         }
+        if let Some(notion) = update.notion_config {
+            config.notion_config = Some(notion);
+        }
 
         self.save(&config).await?;
         Ok(config.clone())

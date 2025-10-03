@@ -4,7 +4,7 @@
   <el-dialog
     v-model="dialogVisible"
     title="应用设置"
-    width="700px"
+    width="900px"
     @close="handleClose"
     destroy-on-close
   >
@@ -365,6 +365,151 @@
         </div>
       </el-tab-pane>
 
+      <!-- Notion 集成 -->
+      <el-tab-pane label="Notion 集成" name="notion">
+        <el-form :model="notionConfig" label-width="140px">
+          <el-form-item label="启用 Notion 同步">
+            <el-switch v-model="notionConfig.enabled" />
+            <span class="form-tip">启用后会将会话记录同步到 Notion</span>
+          </el-form-item>
+
+          <el-form-item label="API Token">
+            <el-input
+              v-model="notionConfig.api_token"
+              type="password"
+              placeholder="secret_..."
+              show-password
+              :disabled="!notionConfig.enabled"
+            />
+            <el-button
+              type="primary"
+              size="small"
+              @click="testNotionConnection"
+              :loading="testingNotion"
+              :disabled="!notionConfig.enabled || !notionConfig.api_token"
+              style="margin-left: 10px"
+            >
+              测试连接
+            </el-button>
+            <span class="form-tip">Notion Integration 的 API Token</span>
+          </el-form-item>
+
+          <el-form-item label="选择数据库">
+            <div style="display: flex; gap: 8px; width: 100%; flex-wrap: wrap;">
+              <el-select
+                v-model="notionConfig.database_id"
+                placeholder="请先填写 API Token 并搜索页面"
+                :disabled="!notionConfig.enabled || !notionConfig.api_token"
+                filterable
+                style="flex: 1; min-width: 200px"
+              >
+                <el-option
+                  v-for="page in notionPages"
+                  :key="page.id"
+                  :label="`${page.icon || '📄'} ${page.title} (${page.page_type === 'database' ? '数据库' : '页面'})`"
+                  :value="page.id"
+                />
+              </el-select>
+              <el-button
+                :disabled="!notionConfig.enabled || !notionConfig.api_token"
+                :loading="searchingNotionPages"
+                @click="searchNotionPages"
+              >
+                搜索页面
+              </el-button>
+              <el-button
+                :disabled="!notionConfig.enabled || !notionConfig.api_token || !selectedPageForDatabase"
+                :loading="creatingNotionDatabase"
+                @click="showCreateDatabaseDialog"
+              >
+                创建数据库
+              </el-button>
+            </div>
+            <span class="form-tip">选择已存在的数据库，或在某个页面下创建新数据库</span>
+          </el-form-item>
+
+          <el-divider>同步选项</el-divider>
+
+          <el-form-item label="同步会话">
+            <el-switch
+              v-model="notionConfig.sync_options.sync_sessions"
+              :disabled="!notionConfig.enabled"
+            />
+            <span class="form-tip">同步会话记录到 Notion</span>
+          </el-form-item>
+
+          <el-form-item label="同步视频">
+            <el-switch
+              v-model="notionConfig.sync_options.sync_videos"
+              :disabled="!notionConfig.enabled"
+            />
+            <span class="form-tip">同步视频文件（小于 5MB）</span>
+          </el-form-item>
+
+          <el-form-item label="同步每日总结">
+            <el-switch
+              v-model="notionConfig.sync_options.sync_daily_summary"
+              :disabled="!notionConfig.enabled"
+            />
+          </el-form-item>
+
+          <el-form-item label="同步关键截图">
+            <el-switch
+              v-model="notionConfig.sync_options.sync_screenshots"
+              :disabled="!notionConfig.enabled"
+            />
+          </el-form-item>
+
+          <el-form-item label="视频大小限制">
+            <el-input-number
+              v-model="notionConfig.sync_options.video_size_limit_mb"
+              :min="1"
+              :max="50"
+              :disabled="!notionConfig.enabled"
+            />
+            <span class="form-tip">MB（超过限制的视频不会上传）</span>
+          </el-form-item>
+
+          <el-form-item label="失败重试次数">
+            <el-input-number
+              v-model="notionConfig.max_retries"
+              :min="0"
+              :max="10"
+              :disabled="!notionConfig.enabled"
+            />
+          </el-form-item>
+        </el-form>
+
+        <!-- 创建数据库对话框 -->
+        <el-dialog
+          v-model="createDatabaseDialogVisible"
+          title="创建 Notion 数据库"
+          width="500px"
+        >
+          <el-form label-width="100px">
+            <el-form-item label="父页面">
+              <el-text>{{ selectedPageForDatabase?.icon || '📄' }} {{ selectedPageForDatabase?.title }}</el-text>
+            </el-form-item>
+            <el-form-item label="数据库名称">
+              <el-input
+                v-model="newDatabaseName"
+                placeholder="请输入数据库名称"
+              />
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="createDatabaseDialogVisible = false">取消</el-button>
+            <el-button
+              type="primary"
+              :loading="creatingNotionDatabase"
+              @click="createNotionDatabase"
+            >
+              创建
+            </el-button>
+          </template>
+        </el-dialog>
+      </el-tab-pane>
+
       <!-- 关于 -->
       <el-tab-pane label="关于" name="about">
         <div class="about-content">
@@ -488,6 +633,34 @@ const databaseConfig = reactive({
   password: ''
 })
 
+// Notion 配置
+const notionConfig = reactive({
+  enabled: false,
+  api_token: '',
+  database_id: '',
+  sync_options: {
+    sync_sessions: true,
+    sync_videos: false,
+    sync_daily_summary: false,
+    sync_screenshots: true,
+    video_size_limit_mb: 5
+  },
+  max_retries: 3
+})
+
+const testingNotion = ref(false)
+const notionPages = ref([])
+const searchingNotionPages = ref(false)
+const selectedPageForDatabase = computed(() => {
+  // 找到当前选中的页面（只要不是 database 类型，就可以在其下创建数据库）
+  const selected = notionPages.value.find(p => p.id === notionConfig.database_id)
+  // 只有非 database 类型才能创建子数据库
+  return selected && selected.page_type !== 'database' ? selected : null
+})
+const creatingNotionDatabase = ref(false)
+const createDatabaseDialogVisible = ref(false)
+const newDatabaseName = ref('Screen Analyzer 会话记录')
+
 // 格式化质量提示
 const formatQuality = (value) => {
   if (value <= 18) return '最高质量'
@@ -599,6 +772,90 @@ const syncDataToMariaDB = async () => {
   }
 }
 
+// 测试 Notion 连接
+const testNotionConnection = async () => {
+  if (!notionConfig.api_token) {
+    ElMessage.warning('请先填写 API Token')
+    return
+  }
+
+  testingNotion.value = true
+  try {
+    const result = await invoke('test_notion_connection', {
+      apiToken: notionConfig.api_token
+    })
+    ElMessage({
+      message: result,
+      type: 'success',
+      duration: 5000
+    })
+  } catch (error) {
+    ElMessage.error('Notion 连接测试失败: ' + error)
+  } finally {
+    testingNotion.value = false
+  }
+}
+
+// 搜索 Notion 页面和数据库
+const searchNotionPages = async () => {
+  if (!notionConfig.api_token) {
+    ElMessage.warning('请先填写 API Token')
+    return
+  }
+
+  searchingNotionPages.value = true
+  try {
+    const pages = await invoke('search_notion_pages', {
+      apiToken: notionConfig.api_token
+    })
+    notionPages.value = pages
+    ElMessage.success(`找到 ${pages.length} 个页面/数据库`)
+  } catch (error) {
+    ElMessage.error('搜索页面失败: ' + error)
+  } finally {
+    searchingNotionPages.value = false
+  }
+}
+
+// 显示创建数据库对话框
+const showCreateDatabaseDialog = () => {
+  if (!selectedPageForDatabase.value) {
+    ElMessage.warning('请先选择一个页面作为数据库的父页面')
+    return
+  }
+  createDatabaseDialogVisible.value = true
+}
+
+// 创建 Notion 数据库
+const createNotionDatabase = async () => {
+  if (!notionConfig.api_token || !selectedPageForDatabase.value || !newDatabaseName.value) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+
+  creatingNotionDatabase.value = true
+  try {
+    const databaseId = await invoke('create_notion_database', {
+      apiToken: notionConfig.api_token,
+      parentPageId: selectedPageForDatabase.value.id,
+      databaseName: newDatabaseName.value
+    })
+
+    ElMessage.success('数据库创建成功！')
+
+    // 更新配置并刷新页面列表
+    notionConfig.database_id = databaseId
+    createDatabaseDialogVisible.value = false
+
+    // 重新搜索页面以获取最新列表
+    await searchNotionPages()
+  } catch (error) {
+    ElMessage.error('创建数据库失败: ' + error)
+  } finally {
+    creatingNotionDatabase.value = false
+  }
+}
+
 // 清空日志
 const clearLogs = () => {
   logs.value = []
@@ -621,6 +878,7 @@ const saveSettings = async () => {
     const captureSettingsPayload = JSON.parse(JSON.stringify(settings.capture_settings))
     const loggerSettingsPayload = JSON.parse(JSON.stringify(settings.logger_settings))
     const databaseConfigPayload = buildDatabaseConfig()
+    const notionConfigPayload = JSON.parse(JSON.stringify(notionConfig))
 
     // 保存基础设置
     await store.updateConfig({
@@ -632,7 +890,8 @@ const saveSettings = async () => {
       capture_settings: captureSettingsPayload,
       ui_settings: settings.ui_settings,
       logger_settings: loggerSettingsPayload,
-      database_config: databaseConfigPayload
+      database_config: databaseConfigPayload,
+      notion_config: notionConfigPayload
     })
 
     // 配置LLM提供商
@@ -769,6 +1028,17 @@ const initSettings = () => {
       databaseConfig.username = database_config.username || 'root'
       databaseConfig.password = database_config.password || ''
     }
+  }
+  // 加载 Notion 配置
+  const { notion_config } = store.appConfig
+  if (notion_config) {
+    notionConfig.enabled = notion_config.enabled || false
+    notionConfig.api_token = notion_config.api_token || ''
+    notionConfig.database_id = notion_config.database_id || ''
+    if (notion_config.sync_options) {
+      Object.assign(notionConfig.sync_options, notion_config.sync_options)
+    }
+    notionConfig.max_retries = notion_config.max_retries || 3
   }
 }
 
