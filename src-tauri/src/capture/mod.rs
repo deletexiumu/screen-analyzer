@@ -3,9 +3,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use image::DynamicImage;
-#[cfg(not(target_os = "macos"))]
 use image::imageops;
-#[cfg(not(target_os = "macos"))]
 use screenshots::display_info::DisplayInfo;
 use screenshots::Screen;
 use std::path::PathBuf;
@@ -220,63 +218,7 @@ impl ScreenCapture {
             return Err(anyhow::anyhow!("未找到可用屏幕"));
         }
 
-        // 在 macOS 上使用系统原生截图命令，避免截取到应用窗口
-        #[cfg(target_os = "macos")]
-        let combined = {
-            use std::process::Command;
-            use tempfile::Builder;
-
-            // 创建临时文件用于保存截图（使用 persist 避免自动删除）
-            let temp_file = Builder::new()
-                .prefix("screenshot_")
-                .suffix(".png")
-                .tempfile()
-                .map_err(|e| anyhow::anyhow!("创建临时文件失败: {}", e))?;
-
-            let (file, temp_path) = temp_file.keep()
-                .map_err(|e| anyhow::anyhow!("保留临时文件失败: {}", e.error))?;
-
-            drop(file); // 关闭文件句柄，让 screencapture 能写入
-
-            // 使用 screencapture 命令截取主屏幕
-            // -x: 不播放快门声音
-            // -C: 不包含光标
-            // -t png: 输出格式为 PNG（保证质量）
-            let output = Command::new("screencapture")
-                .arg("-x")
-                .arg("-C")
-                .arg("-t")
-                .arg("png")
-                .arg(&temp_path)
-                .output()
-                .map_err(|e| anyhow::anyhow!("执行 screencapture 命令失败: {}", e))?;
-
-            if !output.status.success() {
-                let error = String::from_utf8_lossy(&output.stderr);
-                // 清理临时文件
-                let _ = std::fs::remove_file(&temp_path);
-                return Err(anyhow::anyhow!("screencapture 命令执行失败: {}", error));
-            }
-
-            // 读取截图文件
-            let img = image::open(&temp_path)
-                .map_err(|e| {
-                    // 清理临时文件
-                    let _ = std::fs::remove_file(&temp_path);
-                    anyhow::anyhow!("读取截图文件失败: {}", e)
-                })?;
-
-            // 读取成功后删除临时文件
-            if let Err(e) = std::fs::remove_file(&temp_path) {
-                warn!("删除临时截图文件失败: {}", e);
-            }
-
-            trace!("使用 screencapture 命令截屏成功");
-            img
-        };
-
-        // 在其他平台使用 screenshots crate
-        #[cfg(not(target_os = "macos"))]
+        // 所有平台统一使用 screenshots crate 进行多屏幕截图
         let combined = {
             let mut captures = Vec::new();
 
@@ -350,7 +292,6 @@ impl ScreenCapture {
         Ok(frame)
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn combine_screens(&self, captures: Vec<(DisplayInfo, DynamicImage)>) -> Result<DynamicImage> {
         if captures.is_empty() {
             return Err(anyhow::anyhow!("没有可合成的屏幕图像"));

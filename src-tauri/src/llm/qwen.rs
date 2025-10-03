@@ -4,7 +4,7 @@ use super::plugin::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use chrono::{DateTime, Local, TimeZone, Timelike};
+use chrono::{Local, TimeZone, Timelike};
 use reqwest::{multipart, Client};
 use serde::Deserialize;
 use serde_json::json;

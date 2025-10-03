@@ -13,12 +13,15 @@ pub fn local_now() -> DateTime<Utc> {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Session {
     pub id: Option<i64>,
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub start_time: DateTime<Utc>,
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub end_time: DateTime<Utc>,
     pub title: String,
     pub summary: String,
     pub video_path: Option<String>,
     pub tags: String, // JSON序列化的标签
+    #[serde(serialize_with = "serialize_datetime_as_local_option")]
     pub created_at: Option<DateTime<Utc>>,
     pub device_name: Option<String>, // 设备名称
     pub device_type: Option<String>, // 设备类型(desktop, laptop, tablet等)
@@ -29,6 +32,7 @@ pub struct Session {
 pub struct Frame {
     pub id: Option<i64>,
     pub session_id: i64,
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub timestamp: DateTime<Utc>,
     pub file_path: String,
 }
@@ -66,6 +70,7 @@ pub struct LLMCallRecord {
     pub error_message: Option<String>,
     pub latency_ms: Option<i64>,     // 调用延迟（毫秒）
     pub token_usage: Option<String>, // JSON格式的token使用情况
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub created_at: DateTime<Utc>,
 }
 
@@ -78,6 +83,7 @@ pub struct VideoSegmentRecord {
     pub start_timestamp: String,  // MM:SS格式
     pub end_timestamp: String,    // MM:SS格式
     pub description: String,
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub created_at: DateTime<Utc>,
 }
 
@@ -97,6 +103,7 @@ pub struct TimelineCardRecord {
     pub distractions: Option<String>,       // JSON格式的干扰活动
     pub app_sites: String,                  // JSON格式的应用/网站信息
     pub video_preview_path: Option<String>, // 本地视频文件路径
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub created_at: DateTime<Utc>,
 }
 
@@ -112,7 +119,9 @@ pub struct DaySummaryRecord {
     pub usage_patterns: String,        // JSON 格式的使用模式
     pub active_device_count: i32,      // 活跃设备数量
     pub llm_call_id: Option<i64>,      // 关联的 LLM 调用记录
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub created_at: DateTime<Utc>,     // 创建时间
+    #[serde(serialize_with = "serialize_datetime_as_local")]
     pub updated_at: DateTime<Utc>,     // 更新时间
 }
 
@@ -132,4 +141,29 @@ where
     let s = String::deserialize(deserializer)?;
     chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
         .map_err(serde::de::Error::custom)
+}
+
+/// 自定义序列化：DateTime<Utc> -> 不带时区标记的字符串
+/// 将数据库中的本地时间序列化为 "YYYY-MM-DD HH:MM:SS" 格式（不带Z后缀）
+/// 这样前端 dayjs 会将其视为本地时间，不会再进行时区转换
+fn serialize_datetime_as_local<S>(dt: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    // 注意：数据库中存储的已经是本地时间（虽然类型是DateTime<Utc>）
+    // 直接格式化为不带时区标记的字符串
+    serializer.serialize_str(&dt.format("%Y-%m-%dT%H:%M:%S").to_string())
+}
+
+/// 自定义序列化：Option<DateTime<Utc>> -> Option<不带时区标记的字符串>
+fn serialize_datetime_as_local_option<S>(dt: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match dt {
+        Some(dt) => {
+            serializer.serialize_some(&dt.format("%Y-%m-%dT%H:%M:%S").to_string())
+        }
+        None => serializer.serialize_none(),
+    }
 }

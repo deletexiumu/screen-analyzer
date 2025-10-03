@@ -2008,8 +2008,6 @@ async fn analyze_video_once(
     duration_minutes: u32,
     reuse_session: Option<i64>,
 ) -> Result<VideoAnalysisOutcome, String> {
-    use chrono::Utc;
-
     let video_path_str = video_path.to_string_lossy().to_string();
     let file_stem = video_path
         .file_stem()

@@ -132,17 +132,21 @@ impl DatabaseRepository for SqliteRepository {
     }
 
     async fn get_sessions_by_date(&self, date: &str) -> Result<Vec<Session>> {
+        // 使用字符串拼接构造时间范围，避免 DATE() 函数的时区转换问题
+        let start_datetime = format!("{} 00:00:00", date);
+        let end_datetime = format!("{} 23:59:59", date);
+
         let sessions = sqlx::query_as::<_, Session>(
             r#"
             SELECT id, start_time, end_time, title, summary,
                    video_path, tags, created_at, device_name, device_type
             FROM sessions
-            WHERE start_time >= DATE(?) AND start_time < DATE(?, '+1 day')
+            WHERE start_time >= ? AND start_time <= ?
             ORDER BY start_time DESC
             "#,
         )
-        .bind(date)
-        .bind(date)
+        .bind(&start_datetime)
+        .bind(&end_datetime)
         .fetch_all(&self.pool)
         .await?;
 
@@ -321,6 +325,10 @@ impl DatabaseRepository for SqliteRepository {
     // ========== 活动统计 ==========
 
     async fn get_activities(&self, start_date: &str, end_date: &str) -> Result<Vec<Activity>> {
+        // 使用字符串拼接构造时间范围，避免 DATE() 函数的时区转换问题
+        let start_datetime = format!("{} 00:00:00", start_date);
+        let end_datetime = format!("{} 23:59:59", end_date);
+
         let rows = sqlx::query(
             r#"
             SELECT
@@ -329,13 +337,13 @@ impl DatabaseRepository for SqliteRepository {
                 SUM(CAST((julianday(end_time) - julianday(start_time)) * 24 * 60 AS INTEGER)) as total_duration_minutes,
                 GROUP_CONCAT(DISTINCT json_extract(tags, '$[0].category')) as main_categories
             FROM sessions
-            WHERE start_time >= DATE(?) AND start_time < DATE(?, '+1 day')
+            WHERE start_time >= ? AND start_time <= ?
             GROUP BY DATE(start_time)
             ORDER BY date DESC
             "#
         )
-        .bind(start_date)
-        .bind(end_date)
+        .bind(&start_datetime)
+        .bind(&end_datetime)
         .fetch_all(&self.pool)
         .await?;
 
