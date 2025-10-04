@@ -1949,66 +1949,144 @@ pub fn run() {
                     info!("已设置 PATH 环境变量（包含 Homebrew 路径）");
                 }
 
-                // 设置系统代理（macOS）
-                use std::process::Command;
-                if let Ok(output) = Command::new("scutil")
-                    .arg("--proxy")
-                    .output()
+                // 设置系统代理
+                #[cfg(target_os = "macos")]
                 {
-                    if output.status.success() {
-                        if let Ok(proxy_info) = String::from_utf8(output.stdout) {
-                            // 解析 HTTP 代理
-                            if let Some(http_enabled) = proxy_info.lines()
-                                .find(|l| l.trim().starts_with("HTTPEnable"))
-                                .and_then(|l| l.split(':').nth(1))
-                                .and_then(|v| v.trim().parse::<i32>().ok())
-                            {
-                                if http_enabled == 1 {
-                                    let http_host = proxy_info.lines()
-                                        .find(|l| l.trim().starts_with("HTTPProxy"))
-                                        .and_then(|l| l.split(':').nth(1))
-                                        .map(|s| s.trim().to_string());
+                    use std::process::Command;
+                    if let Ok(output) = Command::new("scutil")
+                        .arg("--proxy")
+                        .output()
+                    {
+                        if output.status.success() {
+                            if let Ok(proxy_info) = String::from_utf8(output.stdout) {
+                                // 解析 HTTP 代理
+                                if let Some(http_enabled) = proxy_info.lines()
+                                    .find(|l| l.trim().starts_with("HTTPEnable"))
+                                    .and_then(|l| l.split(':').nth(1))
+                                    .and_then(|v| v.trim().parse::<i32>().ok())
+                                {
+                                    if http_enabled == 1 {
+                                        let http_host = proxy_info.lines()
+                                            .find(|l| l.trim().starts_with("HTTPProxy"))
+                                            .and_then(|l| l.split(':').nth(1))
+                                            .map(|s| s.trim().to_string());
 
-                                    let http_port = proxy_info.lines()
-                                        .find(|l| l.trim().starts_with("HTTPPort"))
-                                        .and_then(|l| l.split(':').nth(1))
-                                        .map(|s| s.trim().to_string());
+                                        let http_port = proxy_info.lines()
+                                            .find(|l| l.trim().starts_with("HTTPPort"))
+                                            .and_then(|l| l.split(':').nth(1))
+                                            .map(|s| s.trim().to_string());
 
-                                    if let (Some(host), Some(port)) = (http_host, http_port) {
-                                        let proxy_url = format!("http://{}:{}", host, port);
-                                        std::env::set_var("HTTP_PROXY", &proxy_url);
-                                        std::env::set_var("http_proxy", &proxy_url);
-                                        info!("已设置 HTTP 代理: {}", proxy_url);
+                                        if let (Some(host), Some(port)) = (http_host, http_port) {
+                                            let proxy_url = format!("http://{}:{}", host, port);
+                                            std::env::set_var("HTTP_PROXY", &proxy_url);
+                                            std::env::set_var("http_proxy", &proxy_url);
+                                            info!("已设置 HTTP 代理: {}", proxy_url);
+                                        }
                                     }
                                 }
-                            }
 
-                            // 解析 HTTPS 代理
-                            if let Some(https_enabled) = proxy_info.lines()
-                                .find(|l| l.trim().starts_with("HTTPSEnable"))
-                                .and_then(|l| l.split(':').nth(1))
-                                .and_then(|v| v.trim().parse::<i32>().ok())
-                            {
-                                if https_enabled == 1 {
-                                    let https_host = proxy_info.lines()
-                                        .find(|l| l.trim().starts_with("HTTPSProxy"))
-                                        .and_then(|l| l.split(':').nth(1))
-                                        .map(|s| s.trim().to_string());
+                                // 解析 HTTPS 代理
+                                if let Some(https_enabled) = proxy_info.lines()
+                                    .find(|l| l.trim().starts_with("HTTPSEnable"))
+                                    .and_then(|l| l.split(':').nth(1))
+                                    .and_then(|v| v.trim().parse::<i32>().ok())
+                                {
+                                    if https_enabled == 1 {
+                                        let https_host = proxy_info.lines()
+                                            .find(|l| l.trim().starts_with("HTTPSProxy"))
+                                            .and_then(|l| l.split(':').nth(1))
+                                            .map(|s| s.trim().to_string());
 
-                                    let https_port = proxy_info.lines()
-                                        .find(|l| l.trim().starts_with("HTTPSPort"))
-                                        .and_then(|l| l.split(':').nth(1))
-                                        .map(|s| s.trim().to_string());
+                                        let https_port = proxy_info.lines()
+                                            .find(|l| l.trim().starts_with("HTTPSPort"))
+                                            .and_then(|l| l.split(':').nth(1))
+                                            .map(|s| s.trim().to_string());
 
-                                    if let (Some(host), Some(port)) = (https_host, https_port) {
-                                        let proxy_url = format!("http://{}:{}", host, port);
-                                        std::env::set_var("HTTPS_PROXY", &proxy_url);
-                                        std::env::set_var("https_proxy", &proxy_url);
-                                        info!("已设置 HTTPS 代理: {}", proxy_url);
+                                        if let (Some(host), Some(port)) = (https_host, https_port) {
+                                            let proxy_url = format!("http://{}:{}", host, port);
+                                            std::env::set_var("HTTPS_PROXY", &proxy_url);
+                                            std::env::set_var("https_proxy", &proxy_url);
+                                            info!("已设置 HTTPS 代理: {}", proxy_url);
+                                        }
                                     }
                                 }
                             }
                         }
+                    }
+                }
+
+                // Windows 系统代理设置
+                #[cfg(target_os = "windows")]
+                {
+                    use winreg::enums::*;
+                    use winreg::RegKey;
+
+                    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+                    if let Ok(internet_settings) = hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings") {
+                        // 检查代理是否启用
+                        if let Ok(proxy_enable) = internet_settings.get_value::<u32, _>("ProxyEnable") {
+                            if proxy_enable == 1 {
+                                // 读取代理服务器设置
+                                if let Ok(proxy_server) = internet_settings.get_value::<String, _>("ProxyServer") {
+                                    info!("Windows 代理服务器配置: {}", proxy_server);
+
+                                    // 代理服务器格式可能是：
+                                    // 1. "host:port" (所有协议使用同一代理)
+                                    // 2. "http=host:port;https=host:port" (不同协议使用不同代理)
+
+                                    if proxy_server.contains('=') {
+                                        // 格式2：解析不同协议的代理
+                                        for part in proxy_server.split(';') {
+                                            if let Some((protocol, addr)) = part.split_once('=') {
+                                                let protocol = protocol.trim().to_lowercase();
+                                                let addr = addr.trim();
+
+                                                match protocol.as_str() {
+                                                    "http" => {
+                                                        let proxy_url = if addr.starts_with("http://") {
+                                                            addr.to_string()
+                                                        } else {
+                                                            format!("http://{}", addr)
+                                                        };
+                                                        std::env::set_var("HTTP_PROXY", &proxy_url);
+                                                        std::env::set_var("http_proxy", &proxy_url);
+                                                        info!("已设置 HTTP 代理: {}", proxy_url);
+                                                    }
+                                                    "https" => {
+                                                        let proxy_url = if addr.starts_with("http://") {
+                                                            addr.to_string()
+                                                        } else {
+                                                            format!("http://{}", addr)
+                                                        };
+                                                        std::env::set_var("HTTPS_PROXY", &proxy_url);
+                                                        std::env::set_var("https_proxy", &proxy_url);
+                                                        info!("已设置 HTTPS 代理: {}", proxy_url);
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // 格式1：所有协议使用同一代理
+                                        let proxy_url = if proxy_server.starts_with("http://") {
+                                            proxy_server.clone()
+                                        } else {
+                                            format!("http://{}", proxy_server)
+                                        };
+
+                                        std::env::set_var("HTTP_PROXY", &proxy_url);
+                                        std::env::set_var("http_proxy", &proxy_url);
+                                        std::env::set_var("HTTPS_PROXY", &proxy_url);
+                                        std::env::set_var("https_proxy", &proxy_url);
+                                        info!("已设置系统代理: {}", proxy_url);
+                                    }
+                                }
+                            } else {
+                                info!("Windows 系统代理未启用");
+                            }
+                        }
+                    } else {
+                        warn!("无法读取 Windows 代理设置");
                     }
                 }
             }

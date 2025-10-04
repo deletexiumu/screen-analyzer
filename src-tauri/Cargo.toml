@@ -44,4 +44,7 @@ whoami = "1.4"  # 获取设备信息
 tempfile = "3.23.0"  # macOS 截图需要临时文件
 sysinfo = "0.31"  # 获取系统信息（CPU、内存等）
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"  # Windows 注册表访问（用于获取系统代理）
+
 [dev-dependencies]

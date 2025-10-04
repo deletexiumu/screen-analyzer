@@ -82,17 +82,26 @@ impl VideoUtils {
             })
         };
 
-        let output = std::process::Command::new(&ffprobe_path)
-            .args(&[
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                video_path.to_str().unwrap(),
-            ])
-            .output()?;
+        let mut command = std::process::Command::new(&ffprobe_path);
+        command.args(&[
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            video_path.to_str().unwrap(),
+        ]);
+
+        // Windows下隐藏控制台窗口
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = command.output()?;
 
         let json_str = String::from_utf8(output.stdout)?;
         let info: serde_json::Value = serde_json::from_str(&json_str)?;
@@ -145,21 +154,29 @@ impl VideoUtils {
         time_offset: f32,
     ) -> Result<()> {
         let ffmpeg_path = crate::video::ffmpeg_helper::ensure_ffmpeg_extracted().await?;
-        let status = tokio::process::Command::new(&ffmpeg_path)
-            .args(&[
-                "-ss",
-                &time_offset.to_string(),
-                "-i",
-                video_path.to_str().unwrap(),
-                "-vframes",
-                "1",
-                "-vf",
-                "scale=320:-1",
-                "-y",
-                output_path.to_str().unwrap(),
-            ])
-            .status()
-            .await?;
+        let mut command = tokio::process::Command::new(&ffmpeg_path);
+        command.args(&[
+            "-ss",
+            &time_offset.to_string(),
+            "-i",
+            video_path.to_str().unwrap(),
+            "-vframes",
+            "1",
+            "-vf",
+            "scale=320:-1",
+            "-y",
+            output_path.to_str().unwrap(),
+        ]);
+
+        // Windows下隐藏控制台窗口
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let status = command.status().await?;
 
         if !status.success() {
             return Err(anyhow::anyhow!("缩略图生成失败"));
@@ -180,21 +197,29 @@ impl VideoUtils {
         tokio::fs::write(&list_file, list_content).await?;
 
         let ffmpeg_path = crate::video::ffmpeg_helper::ensure_ffmpeg_extracted().await?;
-        let status = tokio::process::Command::new(&ffmpeg_path)
-            .args(&[
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                list_file.to_str().unwrap(),
-                "-c",
-                "copy",
-                "-y",
-                output_path.to_str().unwrap(),
-            ])
-            .status()
-            .await?;
+        let mut command = tokio::process::Command::new(&ffmpeg_path);
+        command.args(&[
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            list_file.to_str().unwrap(),
+            "-c",
+            "copy",
+            "-y",
+            output_path.to_str().unwrap(),
+        ]);
+
+        // Windows下隐藏控制台窗口
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let status = command.status().await?;
 
         // 删除临时文件
         tokio::fs::remove_file(list_file).await.ok();
