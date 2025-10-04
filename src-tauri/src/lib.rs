@@ -1920,6 +1920,99 @@ pub fn run() {
         .setup(move |app| {
             info!("初始化屏幕活动分析器...");
 
+            // 设置 PATH 环境变量，确保能找到 claude 等命令
+            // macOS 应用运行时不会继承 shell 的 PATH，需要手动添加常见路径
+            #[cfg(target_os = "macos")]
+            {
+                if let Ok(current_path) = std::env::var("PATH") {
+                    let homebrew_paths = vec![
+                        "/opt/homebrew/bin",      // Apple Silicon Homebrew
+                        "/usr/local/bin",         // Intel Mac Homebrew
+                        "/usr/bin",
+                        "/bin",
+                    ];
+
+                    let mut path_parts: Vec<String> = current_path
+                        .split(':')
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    // 添加 Homebrew 路径到开头（如果还没有）
+                    for homebrew_path in homebrew_paths.iter().rev() {
+                        if !path_parts.contains(&homebrew_path.to_string()) {
+                            path_parts.insert(0, homebrew_path.to_string());
+                        }
+                    }
+
+                    let new_path = path_parts.join(":");
+                    std::env::set_var("PATH", &new_path);
+                    info!("已设置 PATH 环境变量（包含 Homebrew 路径）");
+                }
+
+                // 设置系统代理（macOS）
+                use std::process::Command;
+                if let Ok(output) = Command::new("scutil")
+                    .arg("--proxy")
+                    .output()
+                {
+                    if output.status.success() {
+                        if let Ok(proxy_info) = String::from_utf8(output.stdout) {
+                            // 解析 HTTP 代理
+                            if let Some(http_enabled) = proxy_info.lines()
+                                .find(|l| l.trim().starts_with("HTTPEnable"))
+                                .and_then(|l| l.split(':').nth(1))
+                                .and_then(|v| v.trim().parse::<i32>().ok())
+                            {
+                                if http_enabled == 1 {
+                                    let http_host = proxy_info.lines()
+                                        .find(|l| l.trim().starts_with("HTTPProxy"))
+                                        .and_then(|l| l.split(':').nth(1))
+                                        .map(|s| s.trim().to_string());
+
+                                    let http_port = proxy_info.lines()
+                                        .find(|l| l.trim().starts_with("HTTPPort"))
+                                        .and_then(|l| l.split(':').nth(1))
+                                        .map(|s| s.trim().to_string());
+
+                                    if let (Some(host), Some(port)) = (http_host, http_port) {
+                                        let proxy_url = format!("http://{}:{}", host, port);
+                                        std::env::set_var("HTTP_PROXY", &proxy_url);
+                                        std::env::set_var("http_proxy", &proxy_url);
+                                        info!("已设置 HTTP 代理: {}", proxy_url);
+                                    }
+                                }
+                            }
+
+                            // 解析 HTTPS 代理
+                            if let Some(https_enabled) = proxy_info.lines()
+                                .find(|l| l.trim().starts_with("HTTPSEnable"))
+                                .and_then(|l| l.split(':').nth(1))
+                                .and_then(|v| v.trim().parse::<i32>().ok())
+                            {
+                                if https_enabled == 1 {
+                                    let https_host = proxy_info.lines()
+                                        .find(|l| l.trim().starts_with("HTTPSProxy"))
+                                        .and_then(|l| l.split(':').nth(1))
+                                        .map(|s| s.trim().to_string());
+
+                                    let https_port = proxy_info.lines()
+                                        .find(|l| l.trim().starts_with("HTTPSPort"))
+                                        .and_then(|l| l.split(':').nth(1))
+                                        .map(|s| s.trim().to_string());
+
+                                    if let (Some(host), Some(port)) = (https_host, https_port) {
+                                        let proxy_url = format!("http://{}:{}", host, port);
+                                        std::env::set_var("HTTPS_PROXY", &proxy_url);
+                                        std::env::set_var("https_proxy", &proxy_url);
+                                        info!("已设置 HTTPS 代理: {}", proxy_url);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // 设置日志广播器的 app handle
             log_broadcaster.set_app_handle(app.handle().clone());
 

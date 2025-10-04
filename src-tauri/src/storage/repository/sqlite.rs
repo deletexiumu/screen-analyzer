@@ -132,21 +132,17 @@ impl DatabaseRepository for SqliteRepository {
     }
 
     async fn get_sessions_by_date(&self, date: &str) -> Result<Vec<Session>> {
-        // 使用字符串拼接构造时间范围，避免 DATE() 函数的时区转换问题
-        let start_datetime = format!("{} 00:00:00", date);
-        let end_datetime = format!("{} 23:59:59", date);
-
+        // SQLite 存储的是 UTC 时间（RFC3339 格式），使用 DATE() 函数提取日期部分
         let sessions = sqlx::query_as::<_, Session>(
             r#"
             SELECT id, start_time, end_time, title, summary,
                    video_path, tags, created_at, device_name, device_type
             FROM sessions
-            WHERE start_time >= ? AND start_time <= ?
+            WHERE DATE(start_time) = ?
             ORDER BY start_time DESC
             "#,
         )
-        .bind(&start_datetime)
-        .bind(&end_datetime)
+        .bind(date)
         .fetch_all(&self.pool)
         .await?;
 
