@@ -2082,7 +2082,16 @@ pub fn run() {
 
                         // ========== 异步初始化数据库 ==========
                         info!("开始异步初始化数据库...");
-                        let db_result = if let Some(db_config) = db_config_to_load {
+                        let db_result = if let Some(mut db_config) = db_config_to_load {
+                            // 如果是 SQLite，检查路径是否为相对路径，如果是则转换为应用数据目录下的绝对路径
+                            if let crate::storage::config::DatabaseConfig::SQLite { ref mut db_path } = db_config {
+                                let path = std::path::Path::new(db_path.as_str());
+                                if path.is_relative() {
+                                    let absolute_path = app_dir_clone.join(path);
+                                    info!("将相对数据库路径 '{}' 转换为绝对路径: {:?}", db_path, absolute_path);
+                                    *db_path = absolute_path.to_string_lossy().to_string();
+                                }
+                            }
                             info!("使用配置的数据库: {:?}", db_config);
                             Database::from_config(&db_config).await
                         } else {

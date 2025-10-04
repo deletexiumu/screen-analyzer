@@ -153,6 +153,14 @@ impl StorageDomain {
                     }
                 }
 
+                // 检查数据库是否初始化失败（清理器依赖数据库）
+                {
+                    let status = self.db_status.read().await;
+                    if let DatabaseStatus::Failed(err) = &*status {
+                        return Err(format!("数据库初始化失败: {}", err));
+                    }
+                }
+
                 // 短暂等待后重试
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
