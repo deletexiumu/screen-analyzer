@@ -247,6 +247,51 @@ impl ClaudeProvider {
         }
     }
 
+    /// 调用 Claude Agent SDK（带重试机制）
+    async fn call_claude_api_with_retry(
+        &self,
+        system_prompt: String,
+        user_content: Vec<Value>,
+        call_type: &str,
+    ) -> Result<String> {
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_DELAY_SECS: u64 = 60;
+
+        let mut last_error = None;
+
+        for attempt in 1..=MAX_RETRIES {
+            match self.call_claude_api(system_prompt.clone(), user_content.clone(), call_type).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    let error_msg = e.to_string();
+
+                    // 检查是否是超时错误
+                    if error_msg.contains("Timeout") || error_msg.contains("timed out") {
+                        warn!(
+                            "Claude API 调用超时 (尝试 {}/{}): {}",
+                            attempt, MAX_RETRIES, error_msg
+                        );
+
+                        last_error = Some(e);
+
+                        // 如果不是最后一次尝试，等待后重试
+                        if attempt < MAX_RETRIES {
+                            info!("等待 {} 秒后重试...", RETRY_DELAY_SECS);
+                            tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
+                        }
+                    } else {
+                        // 非超时错误，直接返回
+                        error!("Claude API 调用失败（非超时错误）: {}", error_msg);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        // 所有重试都失败
+        Err(last_error.unwrap_or_else(|| anyhow!("Claude API 调用失败")))
+    }
+
     /// 调用 Claude Agent SDK（流式模式，支持视觉分析）
     async fn call_claude_api(
         &self,
@@ -770,7 +815,7 @@ Return ONLY the JSON object."#
         let system_prompt = "You are analyzing computer screen activity.".to_string();
 
         let response = self
-            .call_claude_api(system_prompt, user_content, "analyze_frames")
+            .call_claude_api_with_retry(system_prompt, user_content, "analyze_frames")
             .await?;
 
         let json_value = match Self::extract_json(&response) {
@@ -879,7 +924,7 @@ Return ONLY the JSON object."#
             "You are analyzing screen recording to create activity segments.".to_string();
 
         let response = self
-            .call_claude_api(system_prompt, user_content, "segment_video")
+            .call_claude_api_with_retry(system_prompt, user_content, "segment_video")
             .await?;
 
         let json_value = match Self::extract_json(&response) {
@@ -925,7 +970,7 @@ Return ONLY the JSON object."#
         let system_prompt = "You are creating timeline cards from video segments.".to_string();
 
         let response = self
-            .call_claude_api(system_prompt, user_content, "generate_timeline")
+            .call_claude_api_with_retry(system_prompt, user_content, "generate_timeline")
             .await?;
 
         let mut json_value = match Self::extract_json(&response) {
@@ -1017,7 +1062,7 @@ Return ONLY the JSON object."#
         let system_prompt = "You are creating a daily work summary.".to_string();
 
         let response = self
-            .call_claude_api(system_prompt, user_content, "generate_day_summary")
+            .call_claude_api_with_retry(system_prompt, user_content, "generate_day_summary")
             .await?;
 
         Ok(response.trim().to_string())
