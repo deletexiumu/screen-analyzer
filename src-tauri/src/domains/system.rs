@@ -4,9 +4,9 @@
 // 包含 SystemStatusHandle、LogBroadcaster 和 HTTP 客户端三个核心组件
 // 使用Actor模式管理系统状态，消除锁竞争
 
-use std::sync::Arc;
 use crate::actors::SystemStatusHandle;
 use crate::logger::LogBroadcaster;
+use std::sync::Arc;
 
 /// 系统领域管理器 - 负责系统状态、日志和基础设施
 #[derive(Clone)]
@@ -23,7 +23,11 @@ impl SystemDomain {
         log_broadcaster: Arc<LogBroadcaster>,
         http_client: Arc<reqwest::Client>,
     ) -> Self {
-        Self { system_status_handle, log_broadcaster, http_client }
+        Self {
+            system_status_handle,
+            log_broadcaster,
+            http_client,
+        }
     }
 
     /// 获取系统状态Handle

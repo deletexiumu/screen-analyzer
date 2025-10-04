@@ -3,16 +3,15 @@
 // 实现发布/订阅模式,消除模块间的直接依赖关系
 // 使用 tokio::sync::broadcast 实现高效的事件分发
 
+use crate::llm::SessionSummary;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use tokio::sync::broadcast;
-use crate::llm::SessionSummary;
 
 /// 应用事件枚举 - 定义所有可能的系统事件
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     // --- 捕获事件 ---
-
     /// 截屏完成事件
     ScreenshotCaptured {
         session_id: i64,
@@ -29,11 +28,8 @@ pub enum AppEvent {
     },
 
     // --- 分析事件 ---
-
     /// 分析开始事件
-    AnalysisStarted {
-        session_id: i64,
-    },
+    AnalysisStarted { session_id: i64 },
 
     /// 分析完成事件
     AnalysisCompleted {
@@ -42,17 +38,11 @@ pub enum AppEvent {
     },
 
     /// 分析失败事件
-    AnalysisFailed {
-        session_id: i64,
-        error: String,
-    },
+    AnalysisFailed { session_id: i64, error: String },
 
     // --- 视频事件 ---
-
     /// 视频生成开始事件
-    VideoGenerationStarted {
-        session_id: i64,
-    },
+    VideoGenerationStarted { session_id: i64 },
 
     /// 视频生成完成事件
     VideoGenerated {
@@ -61,17 +51,11 @@ pub enum AppEvent {
     },
 
     /// 视频生成失败事件
-    VideoGenerationFailed {
-        session_id: i64,
-        error: String,
-    },
+    VideoGenerationFailed { session_id: i64, error: String },
 
     // --- 系统事件 ---
-
     /// 配置更新事件
-    ConfigUpdated {
-        config_type: String,
-    },
+    ConfigUpdated { config_type: String },
 
     /// 存储清理开始事件
     StorageCleanupStarted,

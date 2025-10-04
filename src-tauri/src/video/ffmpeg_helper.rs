@@ -8,10 +8,10 @@ use tracing::{debug, info, warn};
 pub fn get_ffmpeg_path() -> Result<PathBuf> {
     // macOS 常见的 ffmpeg 安装路径
     let common_paths = vec![
-        "/opt/homebrew/bin/ffmpeg",      // Apple Silicon Homebrew
-        "/usr/local/bin/ffmpeg",         // Intel Homebrew
-        "/opt/local/bin/ffmpeg",         // MacPorts
-        "/usr/bin/ffmpeg",               // 系统自带（少见）
+        "/opt/homebrew/bin/ffmpeg", // Apple Silicon Homebrew
+        "/usr/local/bin/ffmpeg",    // Intel Homebrew
+        "/opt/local/bin/ffmpeg",    // MacPorts
+        "/usr/bin/ffmpeg",          // 系统自带（少见）
     ];
 
     // 先尝试常见路径
@@ -68,7 +68,9 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
     }
 
     // 都没找到，返回友好的错误提示
-    Err(anyhow!("未找到FFmpeg。请通过 Homebrew 安装: brew install ffmpeg"))
+    Err(anyhow!(
+        "未找到FFmpeg。请通过 Homebrew 安装: brew install ffmpeg"
+    ))
 }
 
 /// 获取内置FFmpeg的路径
@@ -78,7 +80,10 @@ fn get_bundled_ffmpeg_path() -> Result<PathBuf> {
 
     // 根据操作系统选择对应的FFmpeg，使用 PathBuf::join 确保跨平台兼容
     let ffmpeg_path = if cfg!(target_os = "windows") {
-        resource_dir.join("ffmpeg").join("windows").join("ffmpeg.exe")
+        resource_dir
+            .join("ffmpeg")
+            .join("windows")
+            .join("ffmpeg.exe")
     } else if cfg!(target_os = "macos") {
         resource_dir.join("ffmpeg").join("macos").join("ffmpeg")
     } else if cfg!(target_os = "linux") {

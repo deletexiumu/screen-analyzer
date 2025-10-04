@@ -3,12 +3,12 @@
 // 负责数据库、存储清理和设置管理相关的功能
 // 包含 Database、StorageCleaner 和 SettingsManager 三个核心组件
 
+use crate::notion::NotionManager;
+use crate::settings::SettingsManager;
+use crate::storage::cleaner::StorageCleaner;
+use crate::storage::database::Database;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::storage::database::Database;
-use crate::storage::cleaner::StorageCleaner;
-use crate::settings::SettingsManager;
-use crate::notion::NotionManager;
 
 /// 数据库初始化状态
 #[derive(Clone, serde::Serialize)]

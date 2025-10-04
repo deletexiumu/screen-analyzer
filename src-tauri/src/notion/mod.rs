@@ -68,13 +68,17 @@ impl NotionManager {
             tokio::spawn(async move {
                 // 记录当前配置（用于调试）
                 let cfg = c.get_config();
-                info!("Notion 同步配置: sync_videos={}, video_size_limit={}MB",
-                    cfg.sync_options.sync_videos,
-                    cfg.sync_options.video_size_limit_mb);
+                info!(
+                    "Notion 同步配置: sync_videos={}, video_size_limit={}MB",
+                    cfg.sync_options.sync_videos, cfg.sync_options.video_size_limit_mb
+                );
 
                 match c.sync_session(&session).await {
                     Ok(page_id) => {
-                        info!("会话 {:?} 成功同步到 Notion，页面 ID: {}", session.id, page_id);
+                        info!(
+                            "会话 {:?} 成功同步到 Notion，页面 ID: {}",
+                            session.id, page_id
+                        );
                     }
                     Err(e) => {
                         error!("同步会话 {:?} 到 Notion 失败: {}", session.id, e);
@@ -123,7 +127,12 @@ impl NotionManager {
     }
 
     /// 在指定页面下创建数据库
-    pub async fn create_database(&self, api_token: &str, parent_page_id: &str, database_name: &str) -> Result<String> {
+    pub async fn create_database(
+        &self,
+        api_token: &str,
+        parent_page_id: &str,
+        database_name: &str,
+    ) -> Result<String> {
         // 创建临时客户端用于创建数据库
         let temp_config = NotionConfig {
             enabled: true,
@@ -134,6 +143,8 @@ impl NotionManager {
         };
 
         let temp_client = NotionClient::new(temp_config)?;
-        temp_client.create_database(parent_page_id, database_name).await
+        temp_client
+            .create_database(parent_page_id, database_name)
+            .await
     }
 }

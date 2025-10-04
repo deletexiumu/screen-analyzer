@@ -318,7 +318,9 @@ impl DatabaseRepository for CachedRepository {
     }
 
     async fn delete_video_segments_by_session(&self, session_id: i64) -> Result<()> {
-        self.inner.delete_video_segments_by_session(session_id).await
+        self.inner
+            .delete_video_segments_by_session(session_id)
+            .await
     }
 
     async fn insert_timeline_card(&self, card: &TimelineCardRecord) -> Result<i64> {
@@ -341,7 +343,9 @@ impl DatabaseRepository for CachedRepository {
     }
 
     async fn delete_timeline_cards_by_session(&self, session_id: i64) -> Result<()> {
-        self.inner.delete_timeline_cards_by_session(session_id).await
+        self.inner
+            .delete_timeline_cards_by_session(session_id)
+            .await
     }
 
     async fn get_stats(&self) -> Result<(i64, i64, i64)> {

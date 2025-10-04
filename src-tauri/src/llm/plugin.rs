@@ -632,6 +632,14 @@ pub trait LLMProvider: Send + Sync + std::any::Any {
         Ok(cards)
     }
 
+    /// 设置会话时间范围（绝对时间，可用于提示词）
+    fn set_session_window(
+        &mut self,
+        _start: Option<chrono::DateTime<chrono::Utc>>,
+        _end: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+    }
+
     /// 获取提供商名称
     fn name(&self) -> &str;
 
@@ -647,6 +655,11 @@ pub trait LLMProvider: Send + Sync + std::any::Any {
     /// 获取支持的功能
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// 获取最后一次 LLM 调用的数据库 ID（可选，用于追踪）
+    fn last_llm_call_id(&self, _call_type: &str) -> Option<i64> {
+        None // 默认实现返回 None
     }
 
     /// 生成每日总结文本

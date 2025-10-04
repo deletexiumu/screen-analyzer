@@ -1,8 +1,10 @@
 // LLM模块 - 管理AI分析服务
 
+pub mod claude;
 pub mod plugin;
 pub mod qwen;
 
+pub use claude::ClaudeProvider;
 pub use plugin::{
     ActivityCategory, ActivityTag, AppSites, Distraction, KeyMoment, LLMProvider, SessionBrief,
     SessionSummary, TimelineCard, VideoSegment,
@@ -12,25 +14,45 @@ pub use qwen::QwenProvider;
 use crate::capture::scheduler::SessionProcessor;
 use crate::settings::SettingsManager;
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 /// LLM管理器
 pub struct LLMManager {
-    /// Qwen提供商实例
-    provider: QwenProvider,
+    /// 当前使用的提供商
+    provider: Box<dyn LLMProvider>,
     /// 配置锁
     config_lock: Arc<RwLock<LLMConfig>>,
+    /// HTTP 客户端（用于 Qwen provider）
+    http_client: Option<reqwest::Client>,
 }
 
 /// LLM配置
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LLMConfig {
+    /// 当前使用的 provider: "qwen" 或 "claude"
+    #[serde(default = "default_provider")]
+    pub provider: String,
     /// Qwen配置
     pub qwen: QwenConfig,
+    /// Claude配置（目前无需额外配置）
+    #[serde(default)]
+    pub claude: ClaudeConfig,
     /// 分析参数
     pub analysis_params: AnalysisParams,
+}
+
+fn default_provider() -> String {
+    "qwen".to_string()
+}
+
+/// Claude配置（使用 Agent SDK，可通过配置传入 API key）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ClaudeConfig {
+    pub api_key: Option<String>,
+    pub model: Option<String>,
 }
 
 /// Qwen配置
@@ -86,9 +108,13 @@ impl Default for AnalysisParams {
 impl LLMManager {
     /// 创建新的LLM管理器（接受共享的HTTP客户端以复用连接池）
     pub fn new(client: reqwest::Client) -> Self {
+        // 默认使用 Qwen provider
+        let provider: Box<dyn LLMProvider> = Box::new(QwenProvider::new(client.clone()));
+
         Self {
-            provider: QwenProvider::new(client),
+            provider,
             config_lock: Arc::new(RwLock::new(LLMConfig {
+                provider: default_provider(),
                 qwen: QwenConfig {
                     api_key: String::new(),
                     model: default_model(),
@@ -96,42 +122,119 @@ impl LLMManager {
                     use_video_mode: default_video_mode(),
                     video_path: None,
                 },
+                claude: ClaudeConfig::default(),
                 analysis_params: AnalysisParams::default(),
             })),
+            http_client: Some(client),
         }
     }
 
-    /// 配置Qwen
+    /// 配置 LLM（支持多 provider）
     pub async fn configure(&mut self, config: QwenConfig) -> Result<()> {
-        // 如果有视频路径，设置到provider
-        if let Some(ref video_path) = config.video_path {
-            if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
-                provider.set_video_path(Some(video_path.clone()));
+        // 获取当前 provider 类型
+        let current_config = self.config_lock.read().await;
+        let provider_name = current_config.provider.clone();
+        drop(current_config);
+
+        match provider_name.as_str() {
+            "qwen" => {
+                // 如果有视频路径，设置到provider
+                if let Some(ref video_path) = config.video_path {
+                    if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
+                        provider.set_video_path(Some(video_path.clone()));
+                    }
+                }
+
+                // 更新provider配置
+                self.provider.configure(serde_json::to_value(&config)?)?;
+
+                // 更新配置锁
+                let mut current_config = self.config_lock.write().await;
+                current_config.qwen = config;
+
+                info!("Qwen 配置已更新");
+            }
+            "claude" => {
+                // Claude 目前无需额外配置
+                info!("Claude 配置已更新（无需额外配置）");
+            }
+            _ => {
+                warn!("未知的 provider: {}", provider_name);
             }
         }
 
-        // 更新provider配置
-        self.provider.configure(serde_json::to_value(&config)?)?;
+        Ok(())
+    }
 
-        // 更新配置锁
+    /// 切换 provider（不需要 client 参数，使用内部保存的 client）
+    pub async fn switch_provider(&mut self, provider_name: &str) -> Result<()> {
+        info!("切换 LLM provider 到: {}", provider_name);
+
+        match provider_name {
+            "qwen" | "openai" => {
+                // 需要 HTTP 客户端
+                let client = self.http_client.clone().ok_or_else(|| {
+                    anyhow!("无法切换到 Qwen provider: HTTP 客户端未初始化")
+                })?;
+                self.provider = Box::new(QwenProvider::new(client));
+            }
+            "claude" => {
+                self.provider = Box::new(ClaudeProvider::new());
+            }
+            _ => {
+                return Err(anyhow!("不支持的 provider: {}", provider_name));
+            }
+        }
+
+        // 更新配置中的 provider
+        let mut config = self.config_lock.write().await;
+        config.provider = provider_name.to_string();
+
+        info!("已切换到 provider: {}", provider_name);
+        Ok(())
+    }
+
+    /// 配置 Claude provider
+    pub async fn configure_claude(&mut self, config: serde_json::Value) -> Result<()> {
+        info!("配置 Claude provider");
+
+        // 更新 provider 配置
+        self.provider.configure(config.clone())?;
+
+        // 更新配置锁中的 Claude 配置
         let mut current_config = self.config_lock.write().await;
-        current_config.qwen = config;
+        if let Some(api_key) = config.get("api_key").and_then(|v| v.as_str()) {
+            current_config.claude.api_key = Some(api_key.to_string());
+        }
+        if let Some(model) = config.get("model").and_then(|v| v.as_str()) {
+            current_config.claude.model = Some(model.to_string());
+        }
 
-        info!("Qwen配置已更新");
+        info!("Claude 配置已更新");
         Ok(())
     }
 
     pub fn set_video_path(&mut self, video_path: Option<String>) {
         if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
+            provider.set_video_path(video_path.clone());
+        }
+
+        if let Some(provider) = self.provider.as_any().downcast_mut::<ClaudeProvider>() {
             provider.set_video_path(video_path);
         }
     }
 
     /// 设置视频速率乘数
     pub fn set_video_speed(&mut self, speed_multiplier: f32) {
+        // 只有 Qwen provider 需要视频速率
         if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
             provider.set_video_speed(speed_multiplier);
         }
+    }
+
+    /// 设置会话时间范围（用于提示词中的绝对时间）
+    pub fn set_session_window(&mut self, start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) {
+        self.provider.set_session_window(start, end);
     }
 
     /// 分析帧数据
@@ -169,11 +272,25 @@ impl LLMManager {
         db: Arc<crate::storage::Database>,
         session_id: Option<i64>,
     ) {
-        self.provider.set_database(db);
-        if let Some(sid) = session_id {
-            self.provider.set_session_id(sid);
+        // Qwen provider
+        if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
+            provider.set_database(db.clone());
+            if let Some(sid) = session_id {
+                provider.set_session_id(sid);
+            }
+            info!("为 Qwen provider 设置数据库连接");
+            return;
         }
-        info!("为Qwen provider设置数据库连接");
+
+        // Claude provider
+        if let Some(provider) = self.provider.as_any().downcast_mut::<ClaudeProvider>() {
+            provider.set_database(db.clone());
+            if let Some(sid) = session_id {
+                provider.set_session_id(sid);
+            }
+            info!("为 Claude provider 设置数据库连接");
+            return;
+        }
     }
 
     /// 生成时间线卡片（公开方法）
@@ -198,9 +315,7 @@ impl LLMManager {
         date: &str,
         sessions: &[SessionBrief],
     ) -> Result<String> {
-        self.provider
-            .generate_day_summary(date, sessions)
-            .await
+        self.provider.generate_day_summary(date, sessions).await
     }
 
     /// 分析视频并生成时间线（两阶段处理）
@@ -210,8 +325,14 @@ impl LLMManager {
         duration: u32,
         previous_cards: Option<Vec<TimelineCard>>,
     ) -> Result<TimelineAnalysis> {
+        let provider_name = {
+            let config = self.config_lock.read().await;
+            config.provider.clone()
+        };
+
         info!(
-            "使用Qwen进行视频分段分析: {} 帧, 时长 {} 分钟",
+            "使用 {} 进行视频分段分析: {} 帧, 时长 {} 分钟",
+            provider_name,
             frames.len(),
             duration
         );
@@ -550,7 +671,8 @@ impl LLMProcessor {
                         );
 
                         // 发布分析开始事件
-                        event_bus.publish(crate::event_bus::AppEvent::AnalysisStarted { session_id });
+                        event_bus
+                            .publish(crate::event_bus::AppEvent::AnalysisStarted { session_id });
 
                         // 读取该时间段的所有frames
                         let frames_result = Self::load_frames_for_window(
@@ -558,7 +680,8 @@ impl LLMProcessor {
                             session_id,
                             window_start,
                             window_end,
-                        ).await;
+                        )
+                        .await;
 
                         let frames = match frames_result {
                             Ok(f) => f,
@@ -654,7 +777,8 @@ impl LLMProcessor {
 
             // 检查是否在时间窗口内
             if timestamp_ms >= start_ms && timestamp_ms < end_ms {
-                let Some(timestamp) = chrono::Utc.timestamp_millis_opt(timestamp_ms).single() else {
+                let Some(timestamp) = chrono::Utc.timestamp_millis_opt(timestamp_ms).single()
+                else {
                     continue;
                 };
 
@@ -669,7 +793,11 @@ impl LLMProcessor {
         // 按时间排序
         frames.sort_by_key(|f| f.timestamp);
 
-        info!("加载了 {} 个frames用于会话分析 (session_id={})", frames.len(), session_id);
+        info!(
+            "加载了 {} 个frames用于会话分析 (session_id={})",
+            frames.len(),
+            session_id
+        );
         Ok(frames)
     }
 }
@@ -709,7 +837,7 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
                 // 应用帧过滤：每5秒选择一张图片（假设原始截图是1fps）
                 let filtered_frame_paths = crate::video::filter_frames_by_interval(
                     all_frame_paths.clone(),
-                    5 // 每5秒取一帧
+                    5, // 每5秒取一帧
                 );
 
                 info!(
@@ -789,7 +917,9 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
         self.llm_handle.set_video_path(video_path.clone()).await?;
 
         // 设置provider的数据库连接和session_id
-        self.llm_handle.set_provider_database(self.db.clone(), Some(session_id)).await?;
+        self.llm_handle
+            .set_provider_database(self.db.clone(), Some(session_id))
+            .await?;
 
         // 设置视频速率乘数
         let app_config = self.settings.get().await;
@@ -798,9 +928,11 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
 
         // 使用两阶段分析：先分段，再生成时间线
         let analysis = {
-            match self.llm_handle
+            match self
+                .llm_handle
                 .segment_video_and_generate_timeline(frame_paths, duration_minutes, None)
-                .await {
+                .await
+            {
                 Ok(result) => result,
                 Err(e) => {
                     // 如果是视频过短错误，清理已创建的资源

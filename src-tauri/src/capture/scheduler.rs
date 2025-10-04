@@ -143,10 +143,7 @@ impl CaptureScheduler {
     }
 
     /// 启动会话处理任务(事件驱动版本)
-    pub fn start_session_task(
-        self: Arc<Self>,
-        event_bus: Arc<EventBus>,
-    ) {
+    pub fn start_session_task(self: Arc<Self>, event_bus: Arc<EventBus>) {
         let capture = self.capture.clone();
         let session_mins = self.session_duration;
 

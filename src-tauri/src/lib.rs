@@ -118,7 +118,9 @@ async fn get_day_sessions(
     date: String,
 ) -> Result<Vec<Session>, String> {
     state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_sessions_by_date(&date)
         .await
         .map_err(|e| e.to_string())
@@ -138,7 +140,9 @@ async fn get_day_summary(
     let db = state.storage_domain.get_db().await?;
     let llm_handle = state.analysis_domain.get_llm_handle();
     let generator = domains::summary::SummaryGenerator::with_llm(db, llm_handle.clone());
-    generator.generate_day_summary(&date, force_refresh.unwrap_or(false)).await
+    generator
+        .generate_day_summary(&date, force_refresh.unwrap_or(false))
+        .await
 }
 
 /// 获取会话详情
@@ -149,7 +153,9 @@ async fn get_session_detail(
 ) -> Result<SessionDetail, String> {
     validate_session_id(session_id)?;
     state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())
@@ -168,7 +174,8 @@ async fn update_config(
     config: AppConfig,
 ) -> Result<PersistedAppConfig, String> {
     let updated_config = state
-        .storage_domain.get_settings()
+        .storage_domain
+        .get_settings()
         .update(config.clone())
         .await
         .map_err(|e| e.to_string())?;
@@ -177,7 +184,9 @@ async fn update_config(
     if let Some(retention_days) = config.retention_days {
         // 直接调用cleaner的方法，不需要获取可变引用
         state
-            .storage_domain.get_cleaner().await?
+            .storage_domain
+            .get_cleaner()
+            .await?
             .set_retention_days(retention_days)
             .await
             .map_err(|e| e.to_string())?;
@@ -203,14 +212,24 @@ async fn update_config(
 
     // 更新截屏配置
     if let Some(capture_settings) = config.capture_settings {
-        state.capture_domain.get_capture().update_settings(capture_settings.clone()).await;
+        state
+            .capture_domain
+            .get_capture()
+            .update_settings(capture_settings.clone())
+            .await;
         info!("截屏配置已更新: {:?}", capture_settings);
     }
 
     // 更新日志配置
     if let Some(logger_settings) = config.logger_settings {
-        state.system_domain.get_logger().set_enabled(logger_settings.enable_frontend_logging);
-        info!("日志配置已更新: 前端日志推送 = {}", logger_settings.enable_frontend_logging);
+        state
+            .system_domain
+            .get_logger()
+            .set_enabled(logger_settings.enable_frontend_logging);
+        info!(
+            "日志配置已更新: 前端日志推送 = {}",
+            logger_settings.enable_frontend_logging
+        );
     }
 
     Ok(updated_config)
@@ -226,7 +245,9 @@ async fn add_manual_tag(
     validate_session_id(session_id)?;
     // 获取当前会话
     let session_detail = state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -239,7 +260,9 @@ async fn add_manual_tag(
     let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
 
     state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .update_session_tags(session_id, &tags_json)
         .await
         .map_err(|e| e.to_string())?;
@@ -257,7 +280,9 @@ async fn remove_tag(
     validate_session_id(session_id)?;
     // 获取当前会话
     let session_detail = state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -273,7 +298,9 @@ async fn remove_tag(
     let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
 
     state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .update_session_tags(session_id, &tags_json)
         .await
         .map_err(|e| e.to_string())?;
@@ -306,7 +333,11 @@ async fn get_system_status(state: tauri::State<'_, AppState>) -> Result<SystemSt
 /// 切换截屏状态（暂停/恢复）
 #[tauri::command]
 async fn toggle_capture(state: tauri::State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    state.system_domain.get_status_handle().set_capturing(enabled).await;
+    state
+        .system_domain
+        .get_status_handle()
+        .set_capturing(enabled)
+        .await;
 
     if enabled {
         info!("恢复截屏");
@@ -352,12 +383,22 @@ async fn retry_session_analysis(
     info!("重新分析会话: {}", session_id);
 
     // 已移除 analysis_lock 临时方案，直接执行分析
-    state.system_domain.get_status_handle().set_processing(true).await;
-    state.system_domain.get_status_handle().set_error(None).await;
+    state
+        .system_domain
+        .get_status_handle()
+        .set_processing(true)
+        .await;
+    state
+        .system_domain
+        .get_status_handle()
+        .set_error(None)
+        .await;
 
     let result = async {
         let session_detail = state
-            .storage_domain.get_db().await?
+            .storage_domain
+            .get_db()
+            .await?
             .get_session_detail(session_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -378,18 +419,33 @@ async fn retry_session_analysis(
         };
 
         // 使用 Database 方法删除和更新
-        state.storage_domain.get_db().await?
+        state
+            .storage_domain
+            .get_db()
+            .await?
             .delete_video_segments_by_session(session_id)
             .await
             .map_err(|e| e.to_string())?;
 
-        state.storage_domain.get_db().await?
+        state
+            .storage_domain
+            .get_db()
+            .await?
             .delete_timeline_cards_by_session(session_id)
             .await
             .map_err(|e| e.to_string())?;
 
-        state.storage_domain.get_db().await?
-            .update_session(session_id, &session_detail.session.title, "重新分析中...", None, "[]")
+        state
+            .storage_domain
+            .get_db()
+            .await?
+            .update_session(
+                session_id,
+                &session_detail.session.title,
+                "重新分析中...",
+                None,
+                "[]",
+            )
             .await
             .map_err(|e| e.to_string())?;
 
@@ -410,9 +466,21 @@ async fn retry_session_analysis(
 
     let last_error = result.as_ref().err().cloned();
 
-    state.system_domain.get_status_handle().set_processing(false).await;
-    state.system_domain.get_status_handle().update_last_process_time(storage::local_now()).await;
-    state.system_domain.get_status_handle().set_error(last_error.clone()).await;
+    state
+        .system_domain
+        .get_status_handle()
+        .set_processing(false)
+        .await;
+    state
+        .system_domain
+        .get_status_handle()
+        .update_last_process_time(storage::local_now())
+        .await;
+    state
+        .system_domain
+        .get_status_handle()
+        .set_error(last_error.clone())
+        .await;
 
     match result {
         Ok(outcome) => Ok(format!(
@@ -493,7 +561,9 @@ async fn get_video_data(
 
     // 获取会话详情
     let session = state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -518,7 +588,9 @@ async fn get_video_url(
     validate_session_id(session_id)?;
     // 获取会话详情
     let session = state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -543,7 +615,9 @@ async fn generate_video(
 
     // 获取会话详情
     let session_detail = state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -554,7 +628,13 @@ async fn generate_video(
     // 如果没有帧，处理错误
     if all_frames.is_empty() {
         error!("会话 {} 没有截图帧，删除该会话", session_id);
-        if let Err(e) = state.storage_domain.get_db().await?.delete_session(session_id).await {
+        if let Err(e) = state
+            .storage_domain
+            .get_db()
+            .await?
+            .delete_session(session_id)
+            .await
+        {
             error!("删除空会话失败: {}", e);
         }
         return Err("该会话没有截图帧，已删除该会话".to_string());
@@ -579,7 +659,8 @@ async fn generate_video(
 
     // 生成输出路径
     let output_path = state
-        .analysis_domain.get_video_processor()
+        .analysis_domain
+        .get_video_processor()
         .output_dir
         .join(format!("session_{}.mp4", session_id));
 
@@ -598,14 +679,17 @@ async fn generate_video(
 
     // 生成视频
     let result = state
-        .analysis_domain.get_video_processor()
+        .analysis_domain
+        .get_video_processor()
         .create_summary_video(frame_paths, &output_path, &config)
         .await
         .map_err(|e| e.to_string())?;
 
     // 更新数据库中的视频路径
     state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .update_session_video_path(session_id, &result.file_path)
         .await
         .map_err(|e| {
@@ -726,7 +810,11 @@ async fn test_generate_videos(
             video_config.format.extension()
         );
 
-        let output_path = state.analysis_domain.get_video_processor().output_dir.join(&output_name);
+        let output_path = state
+            .analysis_domain
+            .get_video_processor()
+            .output_dir
+            .join(&output_name);
 
         let frame_list: Vec<String> = frame_paths
             .iter()
@@ -736,7 +824,7 @@ async fn test_generate_videos(
         // 应用帧过滤：每5秒选择一张图片
         let filtered_frame_list = video::filter_frames_by_interval(
             frame_list.clone(),
-            FRAME_SAMPLE_INTERVAL_SECONDS as usize
+            FRAME_SAMPLE_INTERVAL_SECONDS as usize,
         );
 
         info!(
@@ -747,7 +835,8 @@ async fn test_generate_videos(
         );
 
         match state
-            .analysis_domain.get_video_processor()
+            .analysis_domain
+            .get_video_processor()
             .create_summary_video(filtered_frame_list, &output_path, &video_config)
             .await
         {
@@ -795,7 +884,10 @@ async fn test_generate_videos(
             "部分视频段生成失败 ({}/{}): {:?}",
             failed_segments.len(),
             failed_segments.len() + generated_videos.len(),
-            failed_segments.iter().map(|(name, _)| name).collect::<Vec<_>>()
+            failed_segments
+                .iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -807,7 +899,9 @@ async fn test_generate_videos(
 async fn cleanup_storage(state: tauri::State<'_, AppState>) -> Result<(), String> {
     info!("手动触发存储清理");
     state
-        .storage_domain.get_cleaner().await?
+        .storage_domain
+        .get_cleaner()
+        .await?
         .trigger_cleanup()
         .await
         .map_err(|e| e.to_string())
@@ -819,7 +913,9 @@ async fn get_storage_stats(
     state: tauri::State<'_, AppState>,
 ) -> Result<storage::cleaner::StorageStats, String> {
     state
-        .storage_domain.get_cleaner().await?
+        .storage_domain
+        .get_cleaner()
+        .await?
         .get_storage_stats()
         .await
         .map_err(|e| e.to_string())
@@ -827,16 +923,14 @@ async fn get_storage_stats(
 
 /// 迁移数据库时区：将 UTC 时间转换为本地时间
 #[tauri::command]
-async fn migrate_timezone_to_local(
-    state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
+async fn migrate_timezone_to_local(state: tauri::State<'_, AppState>) -> Result<String, String> {
     info!("开始数据库时区迁移");
 
     let db = state.storage_domain.get_db().await?;
-    let (sessions, frames, llm_calls, video_segments, timeline_cards, day_summaries) =
-        db.migrate_timezone_to_local()
-            .await
-            .map_err(|e| format!("时区迁移失败: {}", e))?;
+    let (sessions, frames, llm_calls, video_segments, timeline_cards, day_summaries) = db
+        .migrate_timezone_to_local()
+        .await
+        .map_err(|e| format!("时区迁移失败: {}", e))?;
 
     let message = format!(
         "时区迁移完成！\n\
@@ -908,7 +1002,12 @@ async fn configure_qwen(
     state: tauri::State<'_, AppState>,
     config: llm::QwenConfig,
 ) -> Result<(), String> {
-    state.analysis_domain.get_llm_handle().configure(config).await.map_err(|e| e.to_string())
+    state
+        .analysis_domain
+        .get_llm_handle()
+        .configure(config)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 配置LLM提供商（统一接口）
@@ -920,49 +1019,72 @@ async fn configure_llm_provider(
 ) -> Result<(), String> {
     info!("配置LLM提供商: {}", provider);
 
-    // 目前只支持Qwen（通过OpenAI兼容接口）
-    if provider != "openai" {
-        return Err(format!("不支持的提供商: {}", provider));
-    }
+    // 根据 provider 构建配置
+    let llm_provider_config = match provider.as_str() {
+        "openai" => {
+            // Qwen (通过 OpenAI 兼容接口)
+            let qwen_config = llm::QwenConfig {
+                api_key: config
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                model: config
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("qwen-vl-max-latest")
+                    .to_string(),
+                base_url: config
+                    .get("base_url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
+                    .to_string(),
+                use_video_mode: config
+                    .get("use_video_mode")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                video_path: config
+                    .get("video_path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            };
 
-    // 转换为QwenConfig
-    let qwen_config = llm::QwenConfig {
-        api_key: config
-            .get("api_key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        model: config
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("qwen-vl-max-latest")
-            .to_string(),
-        base_url: config
-            .get("base_url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
-            .to_string(),
-        use_video_mode: config
-            .get("use_video_mode")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        video_path: config
-            .get("video_path")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-    };
+            models::LLMProviderConfig {
+                api_key: qwen_config.api_key.clone(),
+                model: qwen_config.model.clone(),
+                base_url: qwen_config.base_url.clone(),
+                use_video_mode: qwen_config.use_video_mode,
+            }
+        }
+        "claude" => {
+            // Claude (使用 claude-agent-sdk，API key 可选)
+            let api_key = config
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
-    // 保存到持久化配置
-    let llm_provider_config = models::LLMProviderConfig {
-        api_key: qwen_config.api_key.clone(),
-        model: qwen_config.model.clone(),
-        base_url: qwen_config.base_url.clone(),
-        use_video_mode: qwen_config.use_video_mode,
+            let model = config
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("claude-sonnet-4-5")
+                .to_string();
+
+            models::LLMProviderConfig {
+                api_key,
+                model,
+                base_url: String::new(), // Claude 不需要 base_url
+                use_video_mode: true,     // Claude 支持视频模式
+            }
+        }
+        _ => {
+            return Err(format!("不支持的提供商: {}", provider));
+        }
     };
 
     let update = models::AppConfig {
         retention_days: None,
-        llm_provider: Some(provider),
+        llm_provider: Some(provider.clone()),
         capture_interval: None,
         summary_interval: None,
         video_config: None,
@@ -975,15 +1097,50 @@ async fn configure_llm_provider(
     };
 
     state
-        .storage_domain.get_settings()
+        .storage_domain
+        .get_settings()
         .update(update)
         .await
         .map_err(|e| format!("保存配置失败: {}", e))?;
 
     // 配置内存中的LLM管理器
-    state.analysis_domain.get_llm_handle().configure(qwen_config)
-        .await
-        .map_err(|e| e.to_string())?;
+    // 注意：目前 LLM Manager 的 configure 方法只支持 QwenConfig
+    // Claude 的配置在切换 provider 时自动处理
+    if provider == "openai" {
+        let qwen_config = llm::QwenConfig {
+            api_key: config
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            model: config
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("qwen-vl-max-latest")
+                .to_string(),
+            base_url: config
+                .get("base_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
+                .to_string(),
+            use_video_mode: config
+                .get("use_video_mode")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            video_path: config
+                .get("video_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        };
+
+        state
+            .analysis_domain
+            .get_llm_handle()
+            .configure(qwen_config)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    // Claude 的配置会在应用启动时或切换 provider 时自动加载
 
     info!("LLM配置已保存并应用");
     Ok(())
@@ -1017,7 +1174,9 @@ async fn delete_session(
 
     // 获取会话详情
     let session_detail = state
-        .storage_domain.get_db().await?
+        .storage_domain
+        .get_db()
+        .await?
         .get_session_detail(session_id)
         .await
         .map_err(|e| format!("获取会话详情失败: {}", e))?;
@@ -1037,7 +1196,10 @@ async fn delete_session(
     }
 
     // 删除数据库记录 - 使用 Database 提供的方法
-    state.storage_domain.get_db().await?
+    state
+        .storage_domain
+        .get_db()
+        .await?
         .delete_session(session_id)
         .await
         .map_err(|e| format!("删除会话失败: {}", e))?;
@@ -1139,13 +1301,20 @@ async fn regenerate_timeline(
         // 使用LLM重新生成timeline
         let llm_handle = state.analysis_domain.get_llm_handle();
         // 设置当前的 session_id，以便 LLM 调用记录能正确关联
-        llm_handle.set_provider_database(state.storage_domain.get_db().await?.clone(), Some(session_id)).await
+        llm_handle
+            .set_provider_database(
+                state.storage_domain.get_db().await?.clone(),
+                Some(session_id),
+            )
+            .await
             .map_err(|e| format!("设置数据库失败: {}", e))?;
 
         // 设置视频速率乘数（虽然generate_timeline不直接使用，但保持一致性）
         let app_config = state.storage_domain.get_settings().get().await;
         let speed_multiplier = app_config.video_config.speed_multiplier;
-        llm_handle.set_video_speed(speed_multiplier).await
+        llm_handle
+            .set_video_speed(speed_multiplier)
+            .await
             .map_err(|e| format!("设置视频速率失败: {}", e))?;
         let timeline_cards = match llm_handle.generate_timeline(video_segments, None).await {
             Ok(cards) => cards,
@@ -1202,7 +1371,13 @@ async fn regenerate_timeline(
                 })
                 .collect();
 
-            if let Err(e) = state.storage_domain.get_db().await?.insert_timeline_cards(&card_records).await {
+            if let Err(e) = state
+                .storage_domain
+                .get_db()
+                .await?
+                .insert_timeline_cards(&card_records)
+                .await
+            {
                 error!("保存时间线卅片失败: {}", e);
             }
         }
@@ -1257,7 +1432,11 @@ async fn open_storage_folder(
 ) -> Result<(), String> {
     let path = match folder_type {
         FolderType::Frames => state.capture_domain.get_capture().frames_dir(),
-        FolderType::Videos => state.analysis_domain.get_video_processor().output_dir.clone(),
+        FolderType::Videos => state
+            .analysis_domain
+            .get_video_processor()
+            .output_dir
+            .clone(),
     };
 
     open_folder_in_explorer(&path)
@@ -1274,8 +1453,7 @@ fn get_log_dir() -> Result<String, String> {
         PathBuf::from(appdata).join("screen-analyzer").join("logs")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join(".local/share/screen-analyzer/logs")
+        PathBuf::from(home).join(".local/share/screen-analyzer/logs")
     };
 
     Ok(log_dir.to_string_lossy().to_string())
@@ -1292,8 +1470,7 @@ fn open_log_folder() -> Result<(), String> {
         PathBuf::from(appdata).join("screen-analyzer").join("logs")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join(".local/share/screen-analyzer/logs")
+        PathBuf::from(home).join(".local/share/screen-analyzer/logs")
     };
 
     info!("打开日志文件夹: {:?}", log_dir);
@@ -1316,9 +1493,9 @@ async fn test_llm_api(
             // 测试OpenAI兼容接口（包括通义千问）
             test_openai_text_api(config).await
         }
-        "anthropic" => {
-            // 测试Anthropic API
-            test_anthropic_text_api(config).await
+        "claude" | "anthropic" => {
+            // 测试 Claude (使用 claude-agent-sdk)
+            test_claude_sdk_api(config).await
         }
         _ => Err(format!("不支持的提供商: {}", provider)),
     };
@@ -1404,71 +1581,119 @@ async fn test_openai_text_api(config: serde_json::Value) -> Result<String, Strin
 }
 
 /// 测试Anthropic文本API
-async fn test_anthropic_text_api(config: serde_json::Value) -> Result<String, String> {
-    use reqwest::Client;
+/// 测试 Claude Agent SDK API
+async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String> {
+    use claude_agent_sdk::{
+        message::parse_message,
+        transport::{PromptInput, SubprocessTransport},
+        types::{ClaudeAgentOptions, ContentBlock as AgentContentBlock, Message as AgentMessage},
+        Transport,
+    };
     use serde_json::json;
 
-    let api_key = config
-        .get("api_key")
-        .and_then(|v| v.as_str())
-        .ok_or("API Key未配置")?;
+    let api_key = config.get("api_key").and_then(|v| v.as_str());
 
     let model = config
         .get("model")
         .and_then(|v| v.as_str())
-        .unwrap_or("claude-3-haiku-20240307");
+        .unwrap_or("claude-sonnet-4-5");
 
-    let base_url = config
-        .get("base_url")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("https://api.anthropic.com");
+    // 构建选项
+    let mut options = ClaudeAgentOptions::builder()
+        .system_prompt("You are a helpful assistant.".to_string())
+        .max_turns(1)
+        .build();
+    options.model = Some(model.to_string());
+    options.include_partial_messages = true;
 
-    let client = Client::new();
-    let endpoint = format!("{}/v1/messages", base_url);
-
-    let request_body = json!({
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": "你好，这是一个API连接测试。请简单回复确认连接成功。"
-            }
-        ],
-        "max_tokens": 100
-    });
-
-    let response = client
-        .post(&endpoint)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| format!("网络请求失败: {}", e))?;
-
-    if !response.status().is_success() {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "无法读取错误信息".to_string());
-        return Err(format!("API返回错误: {}", error_text));
+    // 如果提供了 API key，设置环境变量
+    if let Some(key) = api_key {
+        if !key.is_empty() {
+            options.env.insert("ANTHROPIC_API_KEY".to_string(), key.to_string());
+        }
     }
 
-    let response_data: serde_json::Value = response
-        .json()
+    // 创建传输层
+    let mut transport = SubprocessTransport::new(PromptInput::Stream, options, None)
+        .map_err(|e| format!("初始化 Claude Agent 失败: {}", e))?;
+
+    transport
+        .connect()
         .await
-        .map_err(|e| format!("解析响应失败: {}", e))?;
+        .map_err(|e| format!("连接 Claude Agent 失败: {}", e))?;
 
-    let content = response_data
-        .get("content")
-        .and_then(|c| c.get(0))
-        .and_then(|content| content.get("text"))
-        .and_then(|text| text.as_str())
-        .ok_or("无法从响应中提取内容")?;
+    // 发送测试消息
+    let message_payload = json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "你好，这是一个API连接测试。请简单回复确认连接成功。"
+            }]
+        }
+    });
 
-    Ok(content.to_string())
+    let message_line = format!("{}\n", serde_json::to_string(&message_payload).unwrap());
+    transport
+        .write(&message_line)
+        .await
+        .map_err(|e| format!("发送消息失败: {}", e))?;
+
+    transport
+        .end_input()
+        .await
+        .map_err(|e| format!("关闭输入流失败: {}", e))?;
+
+    // 读取响应
+    let mut message_rx = transport.read_messages();
+    let mut response_text = String::new();
+
+    while let Some(message_result) = message_rx.recv().await {
+        match message_result {
+            Ok(raw_value) => {
+                match parse_message(raw_value) {
+                    Ok(agent_message) => match agent_message {
+                        AgentMessage::Assistant { message, .. } => {
+                            for block in message.content {
+                                if let AgentContentBlock::Text { text } = block {
+                                    response_text.push_str(&text);
+                                }
+                            }
+                            break;
+                        }
+                        AgentMessage::StreamEvent { event, .. } => {
+                            if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                                if event_type == "content_block_delta" {
+                                    if let Some(delta) = event.get("delta") {
+                                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                            response_text.push_str(text);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        AgentMessage::Result { .. } => break,
+                        _ => {}
+                    },
+                    Err(e) => {
+                        return Err(format!("解析消息失败: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(format!("读取消息失败: {}", e));
+            }
+        }
+    }
+
+    let _ = transport.close().await;
+
+    if response_text.is_empty() {
+        return Err("未收到响应".to_string());
+    }
+
+    Ok(response_text)
 }
 
 /// 测试 Notion API 连接
@@ -1489,11 +1714,11 @@ async fn test_notion_connection(
     };
 
     // 创建临时客户端测试连接
-    let temp_client = notion::NotionClient::new(temp_config)
-        .map_err(|e| e.to_string())?;
+    let temp_client = notion::NotionClient::new(temp_config).map_err(|e| e.to_string())?;
 
     // 测试连接 - 搜索一下用户空间看是否有权限
-    temp_client.search_pages()
+    temp_client
+        .search_pages()
         .await
         .map(|pages| format!("连接成功！可以访问 {} 个页面/数据库", pages.len()))
         .map_err(|e| e.to_string())
@@ -1596,7 +1821,10 @@ async fn process_historical_frames(state: &AppState) -> Result<(), String> {
             None => continue,
         };
 
-        info!("处理会话 {}: {} - {}", session_id, session.start_time, session.end_time);
+        info!(
+            "处理会话 {}: {} - {}",
+            session_id, session.start_time, session.end_time
+        );
 
         // 获取该会话的所有帧
         let frames = match db.get_frames_by_session(session_id).await {
@@ -1625,14 +1853,15 @@ async fn process_historical_frames(state: &AppState) -> Result<(), String> {
                     session.end_time.format("%Y%m%d%H%M")
                 );
 
-                let video_path_buf = state.analysis_domain.get_video_processor().output_dir.join(&video_filename);
+                let video_path_buf = state
+                    .analysis_domain
+                    .get_video_processor()
+                    .output_dir
+                    .join(&video_filename);
                 match state
-                    .analysis_domain.get_video_processor()
-                    .create_summary_video(
-                        frame_paths.clone(),
-                        &video_path_buf,
-                        &video_config,
-                    )
+                    .analysis_domain
+                    .get_video_processor()
+                    .create_summary_video(frame_paths.clone(), &video_path_buf, &video_config)
                     .await
                 {
                     Ok(video_result) => {
@@ -1645,7 +1874,10 @@ async fn process_historical_frames(state: &AppState) -> Result<(), String> {
 
                         let video_path_str = video_path_buf.to_string_lossy();
                         // 更新数据库中的视频路径
-                        if let Err(e) = db.update_session_video_path(session_id, &video_path_str).await {
+                        if let Err(e) = db
+                            .update_session_video_path(session_id, &video_path_str)
+                            .await
+                        {
                             error!("更新会话 {} 视频路径失败: {}", session_id, e);
                         }
 
@@ -1682,8 +1914,7 @@ pub fn run() {
     let log_broadcaster = Arc::new(logger::LogBroadcaster::new());
 
     // 初始化日志系统（带前端推送功能）
-    logger::init_with_broadcaster(log_broadcaster.clone())
-        .expect("Failed to initialize logger");
+    logger::init_with_broadcaster(log_broadcaster.clone()).expect("Failed to initialize logger");
 
     tauri::Builder::default()
         .setup(move |app| {
@@ -1706,7 +1937,16 @@ pub fn run() {
             // 初始化运行时（仅用于初始化，不用于运行 Actor）
             let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
 
-            let (state, llm_actor, status_actor, llm_config_to_load, db_config_to_load, frames_dir_clone, videos_dir_clone) = runtime.block_on(async {
+            let (
+                state,
+                llm_actor,
+                status_actor,
+                llm_provider_name,
+                llm_config_to_load,
+                db_config_to_load,
+                frames_dir_clone,
+                videos_dir_clone,
+            ) = runtime.block_on(async {
                 // 先初始化设置管理器，以便读取数据库配置
                 let settings = Arc::new(
                     SettingsManager::new(app_dir.join("config.json"))
@@ -1718,13 +1958,14 @@ pub fn run() {
                 let initial_config = settings.get().await;
 
                 // 准备数据库配置（延迟初始化）
-                let db_config_to_load = if let Some(db_config) = initial_config.database_config.clone() {
-                    info!("将使用配置的数据库: {:?}", db_config);
-                    Some(db_config)
-                } else {
-                    info!("将使用默认 SQLite 数据库");
-                    None
-                };
+                let db_config_to_load =
+                    if let Some(db_config) = initial_config.database_config.clone() {
+                        info!("将使用配置的数据库: {:?}", db_config);
+                        Some(db_config)
+                    } else {
+                        info!("将使用默认 SQLite 数据库");
+                        None
+                    };
 
                 // 初始化截屏管理器
                 let capture =
@@ -1749,19 +1990,13 @@ pub fn run() {
                 }
 
                 // 保存 LLM 配置（在 Actor 启动后再配置）
-                let llm_config_to_load = initial_config.llm_config.clone().map(|llm_config| {
-                    llm::QwenConfig {
-                        api_key: llm_config.api_key,
-                        model: llm_config.model,
-                        base_url: llm_config.base_url,
-                        use_video_mode: llm_config.use_video_mode,
-                        video_path: None,
-                    }
-                });
+                let llm_provider_name = initial_config.llm_provider.clone();
+                let llm_config_to_load = initial_config.llm_config.clone();
 
                 // 初始化视频处理器
                 let video_processor = Arc::new(
-                    VideoProcessor::new(videos_dir.clone(), temp_dir).expect("视频处理器初始化失败"),
+                    VideoProcessor::new(videos_dir.clone(), temp_dir)
+                        .expect("视频处理器初始化失败"),
                 );
 
                 // 初始化调度器
@@ -1779,7 +2014,10 @@ pub fn run() {
                 // 从配置中读取日志设置并应用
                 let initial_logger_settings = initial_config.logger_settings.unwrap_or_default();
                 log_broadcaster.set_enabled(initial_logger_settings.enable_frontend_logging);
-                info!("日志推送已设置: {}", initial_logger_settings.enable_frontend_logging);
+                info!(
+                    "日志推送已设置: {}",
+                    initial_logger_settings.enable_frontend_logging
+                );
 
                 // 将 HTTP 客户端包装为 Arc 以便在 AppState 中共享
                 let http_client = Arc::new(http_client);
@@ -1787,10 +2025,8 @@ pub fn run() {
                 // ==================== 组装领域管理器 ====================
 
                 // 创建捕获领域
-                let capture_domain = Arc::new(CaptureDomain::new(
-                    capture.clone(),
-                    scheduler.clone(),
-                ));
+                let capture_domain =
+                    Arc::new(CaptureDomain::new(capture.clone(), scheduler.clone()));
 
                 // 创建分析领域（使用LLM Handle）
                 let analysis_domain = Arc::new(AnalysisDomain::new(
@@ -1821,11 +2057,12 @@ pub fn run() {
                     event_bus,
                 };
 
-                // 返回 AppState、两个 Actor、LLM 配置、数据库配置和目录路径
+                // 返回 AppState、两个 Actor、LLM provider、LLM 配置、数据库配置和目录路径
                 (
                     app_state,
                     llm_actor,
                     status_actor,
+                    llm_provider_name,
                     llm_config_to_load,
                     db_config_to_load,
                     frames_dir.clone(),
@@ -1869,7 +2106,12 @@ pub fn run() {
                                 ));
 
                                 // 从配置读取保留天数
-                                let retention_days = state_clone.storage_domain.get_settings().get().await.retention_days;
+                                let retention_days = state_clone
+                                    .storage_domain
+                                    .get_settings()
+                                    .get()
+                                    .await
+                                    .retention_days;
                                 if let Err(e) = cleaner.set_retention_days(retention_days).await {
                                     error!("设置保留天数失败: {}", e);
                                 }
@@ -1882,7 +2124,10 @@ pub fn run() {
                             Err(e) => {
                                 let error_msg = format!("数据库初始化失败: {}", e);
                                 error!("{}", error_msg);
-                                state_clone.storage_domain.set_database_error(error_msg).await;
+                                state_clone
+                                    .storage_domain
+                                    .set_database_error(error_msg)
+                                    .await;
                                 // 继续运行，但数据库相关功能将不可用
                             }
                         }
@@ -1894,11 +2139,64 @@ pub fn run() {
                         info!("Actors 已启动");
 
                         // 配置 LLM（Actor 启动后才能配置）
-                        if let Some(qwen_config) = llm_config_to_load {
-                            if let Err(e) = state_clone.analysis_domain.get_llm_handle().configure(qwen_config).await {
-                                error!("加载LLM配置失败: {}", e);
-                            } else {
-                                info!("已从配置文件加载LLM设置");
+                        // 1. 根据配置切换 provider
+                        let provider = llm_provider_name.as_str();
+                        info!("配置 LLM provider: {}", provider);
+
+                        if let Err(e) = state_clone
+                            .analysis_domain
+                            .get_llm_handle()
+                            .switch_provider(provider)
+                            .await
+                        {
+                            error!("切换 LLM provider 失败: {}", e);
+                        }
+
+                        // 2. 加载 provider 配置
+                        if let Some(llm_config) = llm_config_to_load {
+                            match provider {
+                                "openai" => {
+                                    // Qwen 配置
+                                    let qwen_config = llm::QwenConfig {
+                                        api_key: llm_config.api_key,
+                                        model: llm_config.model,
+                                        base_url: llm_config.base_url,
+                                        use_video_mode: llm_config.use_video_mode,
+                                        video_path: None,
+                                    };
+
+                                    if let Err(e) = state_clone
+                                        .analysis_domain
+                                        .get_llm_handle()
+                                        .configure(qwen_config)
+                                        .await
+                                    {
+                                        error!("加载 Qwen 配置失败: {}", e);
+                                    } else {
+                                        info!("已从配置文件加载 Qwen 设置");
+                                    }
+                                }
+                                "claude" => {
+                                    // Claude 配置
+                                    let claude_config = serde_json::json!({
+                                        "api_key": llm_config.api_key,
+                                        "model": llm_config.model
+                                    });
+
+                                    if let Err(e) = state_clone
+                                        .analysis_domain
+                                        .get_llm_handle()
+                                        .configure_claude(claude_config)
+                                        .await
+                                    {
+                                        error!("加载 Claude 配置失败: {}", e);
+                                    } else {
+                                        info!("已从配置文件加载 Claude 设置");
+                                    }
+                                }
+                                _ => {
+                                    warn!("未知的 LLM provider: {}", provider);
+                                }
                             }
                         }
 
@@ -1906,8 +2204,12 @@ pub fn run() {
                         let config = state_clone.storage_domain.get_settings().get().await;
                         if let Some(notion_config) = config.notion_config {
                             if notion_config.enabled {
-                                if let Err(e) = state_clone.storage_domain.get_notion_manager()
-                                    .initialize(notion_config).await {
+                                if let Err(e) = state_clone
+                                    .storage_domain
+                                    .get_notion_manager()
+                                    .initialize(notion_config)
+                                    .await
+                                {
                                     error!("Notion 初始化失败: {}", e);
                                 } else {
                                     info!("Notion 集成已初始化");
@@ -1927,15 +2229,21 @@ pub fn run() {
                             ));
 
                             // 启动LLM处理器事件监听器
-                            llm_processor.start_event_listener(
-                                state_clone.event_bus.clone(),
-                                state_clone.capture_domain.get_capture().clone(),
-                            ).await;
+                            llm_processor
+                                .start_event_listener(
+                                    state_clone.event_bus.clone(),
+                                    state_clone.capture_domain.get_capture().clone(),
+                                )
+                                .await;
 
                             info!("LLM处理器事件监听器已启动");
 
                             // 启动调度器（事件驱动模式）
-                            state_clone.capture_domain.get_scheduler().clone().start(state_clone.event_bus.clone());
+                            state_clone
+                                .capture_domain
+                                .get_scheduler()
+                                .clone()
+                                .start(state_clone.event_bus.clone());
 
                             // 启动存储清理任务
                             if let Ok(cleaner) = state_clone.storage_domain.get_cleaner().await {
@@ -1954,12 +2262,8 @@ pub fn run() {
                             tokio::spawn(async move {
                                 loop {
                                     // 直接执行分析，无需 analysis_lock（已移除临时方案）
-                                    match analyze_unprocessed_videos(
-                                        &video_state,
-                                        None,
-                                        false,
-                                    )
-                                    .await
+                                    match analyze_unprocessed_videos(&video_state, None, false)
+                                        .await
                                     {
                                         Ok(report) => {
                                             if report.processed > 0 || report.failed > 0 {
@@ -1979,7 +2283,11 @@ pub fn run() {
                         }
 
                         // 更新系统状态
-                        state_clone.system_domain.get_status_handle().set_capturing(true).await;
+                        state_clone
+                            .system_domain
+                            .get_status_handle()
+                            .set_capturing(true)
+                            .await;
 
                         // 启动系统资源监控任务（每5秒更新一次CPU和内存占用率）
                         {
@@ -1995,36 +2303,40 @@ pub fn run() {
                                     sys.refresh_processes(ProcessesToUpdate::Some(&[current_pid]));
 
                                     // 等待一小段时间让CPU统计稳定
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(200))
+                                        .await;
 
                                     // 再次刷新获取准确的CPU使用率
                                     sys.refresh_processes(ProcessesToUpdate::Some(&[current_pid]));
 
-                                    let (cpu_usage, memory_mb) = if let Some(process) = sys.process(current_pid) {
-                                        // 获取当前进程的CPU使用率（单核百分比）
-                                        let cpu_single_core = process.cpu_usage();
+                                    let (cpu_usage, memory_mb) =
+                                        if let Some(process) = sys.process(current_pid) {
+                                            // 获取当前进程的CPU使用率（单核百分比）
+                                            let cpu_single_core = process.cpu_usage();
 
-                                        // 获取CPU核心数
-                                        let cpu_count = sys.cpus().len() as f32;
+                                            // 获取CPU核心数
+                                            let cpu_count = sys.cpus().len() as f32;
 
-                                        // 计算总CPU占用率（所有核心的平均占用率）
-                                        let cpu_total = if cpu_count > 0.0 {
-                                            cpu_single_core / cpu_count
+                                            // 计算总CPU占用率（所有核心的平均占用率）
+                                            let cpu_total = if cpu_count > 0.0 {
+                                                cpu_single_core / cpu_count
+                                            } else {
+                                                cpu_single_core
+                                            };
+
+                                            // 获取当前进程的内存使用（字节）转换为MB
+                                            let process_memory = process.memory();
+                                            let mem_mb = process_memory as f32 / (1024.0 * 1024.0);
+
+                                            (cpu_total, mem_mb)
                                         } else {
-                                            cpu_single_core
+                                            (0.0, 0.0)
                                         };
 
-                                        // 获取当前进程的内存使用（字节）转换为MB
-                                        let process_memory = process.memory();
-                                        let mem_mb = process_memory as f32 / (1024.0 * 1024.0);
-
-                                        (cpu_total, mem_mb)
-                                    } else {
-                                        (0.0, 0.0)
-                                    };
-
                                     // 更新系统状态
-                                    system_state.system_domain.get_status_handle()
+                                    system_state
+                                        .system_domain
+                                        .get_status_handle()
                                         .update_system_resources(cpu_usage, memory_mb)
                                         .await;
 
@@ -2132,30 +2444,51 @@ async fn analyze_video_once(
     let persisted_config = state.storage_domain.get_settings().get().await;
     let llm_handle = state.analysis_domain.get_llm_handle();
 
-    let qwen_config = if let Some(llm_config) = persisted_config.llm_config {
-        llm::QwenConfig {
-            api_key: llm_config.api_key,
-            model: llm_config.model,
-            base_url: llm_config.base_url,
-            use_video_mode: llm_config.use_video_mode,
-            video_path: Some(video_path_str.clone()),
-        }
-    } else {
-        let config = llm_handle.get_config().await.map_err(|e| e.to_string())?;
-        llm::QwenConfig {
-            api_key: config.qwen.api_key.clone(),
-            model: config.qwen.model.clone(),
-            base_url: config.qwen.base_url.clone(),
-            use_video_mode: true,
-            video_path: Some(video_path_str.clone()),
-        }
-    };
+    // 根据当前 provider 配置 LLM
+    let current_provider = persisted_config.llm_provider.as_str();
 
-    if qwen_config.api_key.is_empty() {
-        return Err("请先在设置中配置LLM API Key".to_string());
+    match current_provider {
+        "openai" => {
+            // Qwen provider 需要 API key
+            let qwen_config = if let Some(llm_config) = persisted_config.llm_config {
+                llm::QwenConfig {
+                    api_key: llm_config.api_key,
+                    model: llm_config.model,
+                    base_url: llm_config.base_url,
+                    use_video_mode: llm_config.use_video_mode,
+                    video_path: Some(video_path_str.clone()),
+                }
+            } else {
+                let config = llm_handle.get_config().await.map_err(|e| e.to_string())?;
+                llm::QwenConfig {
+                    api_key: config.qwen.api_key.clone(),
+                    model: config.qwen.model.clone(),
+                    base_url: config.qwen.base_url.clone(),
+                    use_video_mode: true,
+                    video_path: Some(video_path_str.clone()),
+                }
+            };
+
+            if qwen_config.api_key.is_empty() {
+                return Err("请先在设置中配置 Qwen API Key".to_string());
+            }
+
+            if let Err(e) = llm_handle.configure(qwen_config).await {
+                return Err(e.to_string());
+            }
+        }
+        "claude" => {
+            // Claude provider 的 API key 是可选的（可以使用 CLI 凭据）
+            // 不需要额外配置，已经在启动时配置过了
+            info!("使用 Claude provider 进行视频分析（API key 可选）");
+        }
+        _ => {
+            return Err(format!("不支持的 LLM provider: {}", current_provider));
+        }
     }
 
-    if let Err(e) = llm_handle.configure(qwen_config).await {
+    // 设置视频路径
+    if let Err(e) = llm_handle.set_video_path(Some(video_path_str.clone())).await {
         return Err(e.to_string());
     }
 
@@ -2190,7 +2523,13 @@ async fn analyze_video_once(
             device_type: Some(device_type),
         };
 
-        match state.storage_domain.get_db().await?.insert_session(&temp_session).await {
+        match state
+            .storage_domain
+            .get_db()
+            .await?
+            .insert_session(&temp_session)
+            .await
+        {
             Ok(id) => id,
             Err(e) => {
                 let _ = llm_handle.set_video_path(None).await;
@@ -2199,12 +2538,24 @@ async fn analyze_video_once(
         }
     };
 
-    llm_handle.set_provider_database(state.storage_domain.get_db().await?.clone(), Some(session_id)).await
+    llm_handle
+        .set_provider_database(
+            state.storage_domain.get_db().await?.clone(),
+            Some(session_id),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    llm_handle
+        .set_session_window(Some(session_start), Some(session_end))
+        .await
         .map_err(|e| e.to_string())?;
 
     // 设置视频速率乘数（从配置获取）
     let speed_multiplier = persisted_config.video_config.speed_multiplier;
-    llm_handle.set_video_speed(speed_multiplier).await
+    llm_handle
+        .set_video_speed(speed_multiplier)
+        .await
         .map_err(|e| e.to_string())?;
 
     let analysis = match llm_handle
@@ -2224,6 +2575,7 @@ async fn analyze_video_once(
     };
 
     let _ = llm_handle.set_video_path(None).await;
+    let _ = llm_handle.set_session_window(None, None).await;
 
     let mut segments = analysis.segments;
     for segment in &mut segments {
@@ -2267,7 +2619,13 @@ async fn analyze_video_once(
             })
             .collect();
 
-        if let Err(e) = state.storage_domain.get_db().await?.insert_video_segments(&segment_records).await {
+        if let Err(e) = state
+            .storage_domain
+            .get_db()
+            .await?
+            .insert_video_segments(&segment_records)
+            .await
+        {
             return Err(format!("保存视频分段失败: {}", e));
         }
     }
@@ -2297,7 +2655,13 @@ async fn analyze_video_once(
             })
             .collect();
 
-        if let Err(e) = state.storage_domain.get_db().await?.insert_timeline_cards(&card_records).await {
+        if let Err(e) = state
+            .storage_domain
+            .get_db()
+            .await?
+            .insert_timeline_cards(&card_records)
+            .await
+        {
             return Err(format!("保存时间线卡片失败: {}", e));
         }
     }
@@ -2334,7 +2698,11 @@ async fn analyze_unprocessed_videos(
 ) -> Result<VideoAnalysisReport, String> {
     use std::collections::HashSet;
 
-    let videos_dir = state.analysis_domain.get_video_processor().output_dir.clone();
+    let videos_dir = state
+        .analysis_domain
+        .get_video_processor()
+        .output_dir
+        .clone();
 
     // 使用异步 I/O 读取目录
     let mut video_files = Vec::new();
@@ -2392,8 +2760,16 @@ async fn analyze_unprocessed_videos(
 
     // 使用单一的原子操作更新状态
     if mark_status {
-        state.system_domain.get_status_handle().set_processing(true).await;
-        state.system_domain.get_status_handle().set_error(None).await;
+        state
+            .system_domain
+            .get_status_handle()
+            .set_processing(true)
+            .await;
+        state
+            .system_domain
+            .get_status_handle()
+            .set_error(None)
+            .await;
     }
 
     let mut report = VideoAnalysisReport {
@@ -2481,10 +2857,22 @@ async fn analyze_unprocessed_videos(
 
     // 使用单一的原子操作更新所有状态字段
     if mark_status {
-        state.system_domain.get_status_handle().set_processing(false).await;
+        state
+            .system_domain
+            .get_status_handle()
+            .set_processing(false)
+            .await;
     }
-    state.system_domain.get_status_handle().update_last_process_time(storage::local_now()).await;
-    state.system_domain.get_status_handle().set_error(processing_error.clone()).await;
+    state
+        .system_domain
+        .get_status_handle()
+        .update_last_process_time(storage::local_now())
+        .await;
+    state
+        .system_domain
+        .get_status_handle()
+        .set_error(processing_error.clone())
+        .await;
 
     if let Some(err) = processing_error {
         return Err(err);

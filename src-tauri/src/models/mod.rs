@@ -84,11 +84,11 @@ impl Default for CaptureSettings {
 #[serde(rename_all = "lowercase")]
 pub enum CaptureResolution {
     #[serde(rename = "1080p")]
-    FHD,     // 1920x1080 (Full HD)
+    FHD, // 1920x1080 (Full HD)
     #[serde(rename = "2k")]
-    QHD,     // 2560x1440 (2K/Quad HD)
+    QHD, // 2560x1440 (2K/Quad HD)
     #[serde(rename = "4k")]
-    UHD,     // 3840x2160 (4K/Ultra HD)
+    UHD, // 3840x2160 (4K/Ultra HD)
     #[serde(rename = "original")]
     Original, // 原始分辨率
 }
@@ -529,7 +529,7 @@ impl Default for NotionSyncOptions {
     fn default() -> Self {
         Self {
             sync_sessions: true,
-            sync_videos: false, // 默认不同步视频（文件较大）
+            sync_videos: false,        // 默认不同步视频（文件较大）
             sync_daily_summary: false, // 默认不同步每日总结（Notion 会自动总结）
             sync_screenshots: true,
             video_size_limit_mb: 5,

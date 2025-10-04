@@ -20,10 +20,7 @@ fn get_system_timezone() -> String {
     {
         // macOS 使用 Asia/Shanghai 或其他 IANA 时区
         use std::process::Command;
-        if let Ok(output) = Command::new("readlink")
-            .arg("/etc/localtime")
-            .output()
-        {
+        if let Ok(output) = Command::new("readlink").arg("/etc/localtime").output() {
             if let Ok(path) = String::from_utf8(output.stdout) {
                 // 从 /var/db/timezone/zoneinfo/Asia/Shanghai 提取 Asia/Shanghai
                 if let Some(tz) = path.trim().split("/zoneinfo/").nth(1) {
@@ -177,7 +174,10 @@ impl NotionClient {
         let page: Value = response.json().await?;
         let page_id = page["id"].as_str().unwrap_or("unknown").to_string();
 
-        info!("会话 {:?} 成功同步到 Notion，页面 ID: {}", session.id, page_id);
+        info!(
+            "会话 {:?} 成功同步到 Notion，页面 ID: {}",
+            session.id, page_id
+        );
 
         // 如果有视频且启用了视频同步，添加视频到页面内容
         if self.config.sync_options.sync_videos {
@@ -202,8 +202,12 @@ impl NotionClient {
         // 需要转换为真正的 UTC 时间发送给 Notion
 
         // 1. 将数据库的"伪UTC"时间解释为本地时间
-        let start_local = Local.from_local_datetime(&session.start_time.naive_local()).unwrap();
-        let end_local = Local.from_local_datetime(&session.end_time.naive_local()).unwrap();
+        let start_local = Local
+            .from_local_datetime(&session.start_time.naive_local())
+            .unwrap();
+        let end_local = Local
+            .from_local_datetime(&session.end_time.naive_local())
+            .unwrap();
 
         // 2. 转换为真正的 UTC 时间
         let start_utc = start_local.with_timezone(&chrono::Utc);
@@ -252,7 +256,9 @@ impl NotionClient {
         // 添加类别和关键词（解析 JSON 格式的标签）
         if !session.tags.is_empty() {
             // 尝试解析 JSON 格式的标签
-            if let Ok(activity_tags) = serde_json::from_str::<Vec<crate::models::ActivityTag>>(&session.tags) {
+            if let Ok(activity_tags) =
+                serde_json::from_str::<Vec<crate::models::ActivityTag>>(&session.tags)
+            {
                 // 获取主要类别（第一个标签的类别）
                 if let Some(first_tag) = activity_tags.first() {
                     let category_name = match first_tag.category {
@@ -322,14 +328,17 @@ impl NotionClient {
         let metadata = fs::metadata(path).await?;
         let size_mb = metadata.len() / (1024 * 1024);
         let file_size = metadata.len();
-        let file_name = path.file_name()
+        let file_name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("video.mp4");
 
         // 检查文件大小限制
         if size_mb > self.config.sync_options.video_size_limit_mb as u64 {
-            warn!("视频文件 {} 大小 {}MB 超过限制 {}MB，跳过上传",
-                file_name, size_mb, self.config.sync_options.video_size_limit_mb);
+            warn!(
+                "视频文件 {} 大小 {}MB 超过限制 {}MB，跳过上传",
+                file_name, size_mb, self.config.sync_options.video_size_limit_mb
+            );
             return Ok(format!("文件过大（{}MB），已跳过", size_mb));
         }
 
@@ -344,7 +353,10 @@ impl NotionClient {
 
         let create_payload = if use_multi_part {
             let number_of_parts = ((file_size + PART_SIZE - 1) / PART_SIZE) as i32;
-            info!("文件大小 {} MB 超过 20 MB，使用 multi-part 模式（{} 个块）", size_mb, number_of_parts);
+            info!(
+                "文件大小 {} MB 超过 20 MB，使用 multi-part 模式（{} 个块）",
+                size_mb, number_of_parts
+            );
 
             json!({
                 "mode": "multi_part",
@@ -405,16 +417,23 @@ impl NotionClient {
                 let chunk_size = std::cmp::min(PART_SIZE, file_size - offset);
                 let chunk = &file_bytes[offset as usize..(offset + chunk_size) as usize];
 
-                info!("上传第 {} 块 ({} MB)...", part_number, chunk_size / (1024 * 1024));
+                info!(
+                    "上传第 {} 块 ({} MB)...",
+                    part_number,
+                    chunk_size / (1024 * 1024)
+                );
 
                 // 带重试的上传逻辑
                 let mut retry_count = 0;
                 let upload_success = loop {
                     let form = reqwest::multipart::Form::new()
                         .text("part_number", part_number.to_string())
-                        .part("file", reqwest::multipart::Part::bytes(chunk.to_vec())
-                            .file_name(file_name.to_string())
-                            .mime_str("video/mp4")?);
+                        .part(
+                            "file",
+                            reqwest::multipart::Part::bytes(chunk.to_vec())
+                                .file_name(file_name.to_string())
+                                .mime_str("video/mp4")?,
+                        );
 
                     let upload_response = upload_client
                         .post(upload_url)
@@ -431,17 +450,30 @@ impl NotionClient {
                         }
                         Ok(resp) => {
                             let status = resp.status();
-                            let error_text = resp.text().await.unwrap_or_else(|_| "无法读取错误信息".to_string());
+                            let error_text = resp
+                                .text()
+                                .await
+                                .unwrap_or_else(|_| "无法读取错误信息".to_string());
 
                             retry_count += 1;
                             if retry_count >= MAX_RETRIES {
-                                error!("上传第 {} 块失败: error code: {}, {}", part_number, status.as_u16(), error_text);
-                                return Err(anyhow!("上传第 {} 块失败: error code: {}", part_number, status.as_u16()));
+                                error!(
+                                    "上传第 {} 块失败: error code: {}, {}",
+                                    part_number,
+                                    status.as_u16(),
+                                    error_text
+                                );
+                                return Err(anyhow!(
+                                    "上传第 {} 块失败: error code: {}",
+                                    part_number,
+                                    status.as_u16()
+                                ));
                             }
 
                             warn!("上传第 {} 块失败 (尝试 {}/{}): error code: {}, 等待 {}ms 后重试...",
                                 part_number, retry_count, MAX_RETRIES, status.as_u16(), RETRY_DELAY_MS);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS))
+                                .await;
                         }
                         Err(e) => {
                             retry_count += 1;
@@ -450,9 +482,12 @@ impl NotionClient {
                                 return Err(anyhow!("上传第 {} 块网络错误: {}", part_number, e));
                             }
 
-                            warn!("上传第 {} 块网络错误 (尝试 {}/{}): {}, 等待 {}ms 后重试...",
-                                part_number, retry_count, MAX_RETRIES, e, RETRY_DELAY_MS);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                            warn!(
+                                "上传第 {} 块网络错误 (尝试 {}/{}): {}, 等待 {}ms 后重试...",
+                                part_number, retry_count, MAX_RETRIES, e, RETRY_DELAY_MS
+                            );
+                            tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS))
+                                .await;
                         }
                     }
                 };
@@ -467,7 +502,10 @@ impl NotionClient {
 
             // 完成 multi-part 上传
             info!("完成 multi-part 上传");
-            let complete_url = format!("{}/file_uploads/{}/complete", NOTION_API_BASE, file_upload_id);
+            let complete_url = format!(
+                "{}/file_uploads/{}/complete",
+                NOTION_API_BASE, file_upload_id
+            );
 
             let complete_response = upload_client
                 .post(&complete_url)
@@ -483,13 +521,14 @@ impl NotionClient {
             }
 
             info!("Multi-part 上传完成");
-
         } else {
             // Single-part 模式：一次性上传
-            let form = reqwest::multipart::Form::new()
-                .part("file", reqwest::multipart::Part::bytes(file_bytes)
+            let form = reqwest::multipart::Form::new().part(
+                "file",
+                reqwest::multipart::Part::bytes(file_bytes)
                     .file_name(file_name.to_string())
-                    .mime_str("video/mp4")?);
+                    .mime_str("video/mp4")?,
+            );
 
             let upload_response = upload_client
                 .post(upload_url)
@@ -694,10 +733,7 @@ impl NotionClient {
 
         if let Some(results) = result["results"].as_array() {
             for item in results {
-                let id = item["id"]
-                    .as_str()
-                    .unwrap_or("")
-                    .replace("-", ""); // 移除 ID 中的连字符
+                let id = item["id"].as_str().unwrap_or("").replace("-", ""); // 移除 ID 中的连字符
 
                 let page_type = item["object"].as_str().unwrap_or("page");
 
@@ -736,7 +772,11 @@ impl NotionClient {
     }
 
     /// 在指定页面下创建数据库
-    pub async fn create_database(&self, parent_page_id: &str, database_name: &str) -> Result<String> {
+    pub async fn create_database(
+        &self,
+        parent_page_id: &str,
+        database_name: &str,
+    ) -> Result<String> {
         let url = format!("{}/databases", NOTION_API_BASE);
 
         // 获取系统时区
@@ -803,10 +843,7 @@ impl NotionClient {
         }
 
         let database: Value = response.json().await?;
-        let database_id = database["id"]
-            .as_str()
-            .unwrap_or("")
-            .replace("-", ""); // 移除 ID 中的连字符
+        let database_id = database["id"].as_str().unwrap_or("").replace("-", ""); // 移除 ID 中的连字符
 
         info!("成功创建数据库，ID: {}", database_id);
         Ok(database_id)
@@ -814,7 +851,10 @@ impl NotionClient {
 
     /// 检查会话是否已经同步（通过本地ID）
     pub async fn is_session_synced(&self, session_id: i64) -> Result<bool> {
-        let url = format!("{}/databases/{}/query", NOTION_API_BASE, self.config.database_id);
+        let url = format!(
+            "{}/databases/{}/query",
+            NOTION_API_BASE, self.config.database_id
+        );
 
         let filter = json!({
             "filter": {

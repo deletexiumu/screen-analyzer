@@ -1,16 +1,16 @@
 // 截屏模块 - 负责定时捕获屏幕截图
 
+use crate::models::CaptureSettings;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use image::DynamicImage;
 use image::imageops;
+use image::DynamicImage;
 use screenshots::display_info::DisplayInfo;
 use screenshots::Screen;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
-use crate::models::CaptureSettings;
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -204,7 +204,10 @@ impl ScreenCapture {
         let is_black = avg_brightness < settings.black_screen_threshold as u64;
 
         if is_black {
-            info!("检测到黑屏图像（平均亮度: {}, 阈值: {}）", avg_brightness, settings.black_screen_threshold);
+            info!(
+                "检测到黑屏图像（平均亮度: {}, 阈值: {}）",
+                avg_brightness, settings.black_screen_threshold
+            );
         }
 
         is_black
@@ -263,12 +266,12 @@ impl ScreenCapture {
 
         // 保存为JPEG格式，使用配置的质量
         // 使用 JpegEncoder 来指定质量参数
+        use image::codecs::jpeg::JpegEncoder;
         use std::fs::File;
         use std::io::BufWriter;
-        use image::codecs::jpeg::JpegEncoder;
 
-        let output_file = File::create(&file_path)
-            .map_err(|e| anyhow::anyhow!("创建文件失败: {}", e))?;
+        let output_file =
+            File::create(&file_path).map_err(|e| anyhow::anyhow!("创建文件失败: {}", e))?;
         let writer = BufWriter::new(output_file);
         let mut encoder = JpegEncoder::new_with_quality(writer, settings.image_quality);
 

@@ -3,8 +3,8 @@
 // 负责屏幕截取和调度相关的功能
 // 包含 ScreenCapture 和 CaptureScheduler 两个核心组件
 
+use crate::capture::{scheduler::CaptureScheduler, ScreenCapture};
 use std::sync::Arc;
-use crate::capture::{ScreenCapture, scheduler::CaptureScheduler};
 
 /// 捕获领域管理器 - 负责屏幕截取和调度
 #[derive(Clone)]

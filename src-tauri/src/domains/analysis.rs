@@ -4,9 +4,9 @@
 // 包含 LLMHandle 和 VideoProcessor 两个核心组件
 // 使用Actor模式管理LLM状态，消除锁竞争
 
-use std::sync::Arc;
 use crate::actors::LLMHandle;
 use crate::video::processor::VideoProcessor;
+use std::sync::Arc;
 
 /// 分析领域管理器 - 负责 LLM 分析和视频处理
 #[derive(Clone)]
@@ -18,7 +18,10 @@ pub struct AnalysisDomain {
 impl AnalysisDomain {
     /// 创建新的分析领域管理器
     pub fn new(llm_handle: LLMHandle, video_processor: Arc<VideoProcessor>) -> Self {
-        Self { llm_handle, video_processor }
+        Self {
+            llm_handle,
+            video_processor,
+        }
     }
 
     /// 获取 LLM Handle

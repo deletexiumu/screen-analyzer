@@ -111,18 +111,21 @@ pub struct TimelineCardRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DaySummaryRecord {
     pub id: Option<i64>,
-    #[serde(serialize_with = "serialize_naive_date", deserialize_with = "deserialize_naive_date")]
-    pub date: chrono::NaiveDate,       // 日期
-    pub summary_text: String,          // LLM 生成的总结文本
-    pub device_stats: String,          // JSON 格式的设备统计
-    pub parallel_work: String,         // JSON 格式的并行工作
-    pub usage_patterns: String,        // JSON 格式的使用模式
-    pub active_device_count: i32,      // 活跃设备数量
-    pub llm_call_id: Option<i64>,      // 关联的 LLM 调用记录
+    #[serde(
+        serialize_with = "serialize_naive_date",
+        deserialize_with = "deserialize_naive_date"
+    )]
+    pub date: chrono::NaiveDate, // 日期
+    pub summary_text: String,     // LLM 生成的总结文本
+    pub device_stats: String,     // JSON 格式的设备统计
+    pub parallel_work: String,    // JSON 格式的并行工作
+    pub usage_patterns: String,   // JSON 格式的使用模式
+    pub active_device_count: i32, // 活跃设备数量
+    pub llm_call_id: Option<i64>, // 关联的 LLM 调用记录
     #[serde(serialize_with = "serialize_datetime_as_local")]
-    pub created_at: DateTime<Utc>,     // 创建时间
+    pub created_at: DateTime<Utc>, // 创建时间
     #[serde(serialize_with = "serialize_datetime_as_local")]
-    pub updated_at: DateTime<Utc>,     // 更新时间
+    pub updated_at: DateTime<Utc>, // 更新时间
 }
 
 // 自定义序列化：NaiveDate -> String (YYYY-MM-DD)
@@ -139,8 +142,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-        .map_err(serde::de::Error::custom)
+    chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").map_err(serde::de::Error::custom)
 }
 
 /// 自定义序列化：DateTime<Utc> -> 不带时区标记的字符串
@@ -156,14 +158,15 @@ where
 }
 
 /// 自定义序列化：Option<DateTime<Utc>> -> Option<不带时区标记的字符串>
-fn serialize_datetime_as_local_option<S>(dt: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_datetime_as_local_option<S>(
+    dt: &Option<DateTime<Utc>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     match dt {
-        Some(dt) => {
-            serializer.serialize_some(&dt.format("%Y-%m-%dT%H:%M:%S").to_string())
-        }
+        Some(dt) => serializer.serialize_some(&dt.format("%Y-%m-%dT%H:%M:%S").to_string()),
         None => serializer.serialize_none(),
     }
 }

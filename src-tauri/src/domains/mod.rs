@@ -3,14 +3,14 @@
 // 将原本混乱的 AppState 按业务领域分组,实现单一职责原则
 // 包含5个领域:捕获、分析、存储、系统、总结
 
-pub mod capture;
 pub mod analysis;
+pub mod capture;
 pub mod storage;
-pub mod system;
 pub mod summary;
+pub mod system;
 
-pub use capture::CaptureDomain;
 pub use analysis::AnalysisDomain;
+pub use capture::CaptureDomain;
 pub use storage::StorageDomain;
-pub use system::SystemDomain;
 pub use summary::{DaySummary, DeviceStat, ParallelWork, SummaryGenerator, UsagePattern};
+pub use system::SystemDomain;

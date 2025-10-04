@@ -98,7 +98,10 @@ pub trait DatabaseRepository: Send + Sync {
     async fn insert_video_segments(&self, segments: &[VideoSegmentRecord]) -> Result<()>;
 
     /// 获取会话的视频分段
-    async fn get_video_segments_by_session(&self, session_id: i64) -> Result<Vec<VideoSegmentRecord>>;
+    async fn get_video_segments_by_session(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<VideoSegmentRecord>>;
 
     /// 删除会话的视频分段
     async fn delete_video_segments_by_session(&self, session_id: i64) -> Result<()>;
@@ -112,7 +115,10 @@ pub trait DatabaseRepository: Send + Sync {
     async fn insert_timeline_cards(&self, cards: &[TimelineCardRecord]) -> Result<()>;
 
     /// 获取会话的时间线卡片
-    async fn get_timeline_cards_by_session(&self, session_id: i64) -> Result<Vec<TimelineCardRecord>>;
+    async fn get_timeline_cards_by_session(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<TimelineCardRecord>>;
 
     /// 获取最近的时间线卡片
     async fn get_recent_timeline_cards(&self, limit: i64) -> Result<Vec<TimelineCardRecord>>;

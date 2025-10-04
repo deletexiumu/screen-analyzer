@@ -2,47 +2,32 @@
 //
 // 用消息传递替代Arc<RwLock<SystemStatus>>，消除锁竞争
 
-use tokio::sync::{mpsc, oneshot};
 use crate::models::SystemStatus;
 use chrono::{DateTime, Utc};
+use tokio::sync::{mpsc, oneshot};
 
 /// 系统状态命令
 pub enum SystemStatusCommand {
     /// 更新截屏状态
-    UpdateCapturing {
-        is_capturing: bool,
-    },
+    UpdateCapturing { is_capturing: bool },
 
     /// 更新处理状态
-    UpdateProcessing {
-        is_processing: bool,
-    },
+    UpdateProcessing { is_processing: bool },
 
     /// 更新最后截屏时间
-    UpdateLastCaptureTime {
-        time: DateTime<Utc>,
-    },
+    UpdateLastCaptureTime { time: DateTime<Utc> },
 
     /// 更新最后处理时间
-    UpdateLastProcessTime {
-        time: DateTime<Utc>,
-    },
+    UpdateLastProcessTime { time: DateTime<Utc> },
 
     /// 更新当前会话帧数
-    UpdateSessionFrames {
-        count: usize,
-    },
+    UpdateSessionFrames { count: usize },
 
     /// 设置错误信息
-    SetError {
-        error: Option<String>,
-    },
+    SetError { error: Option<String> },
 
     /// 更新系统资源占用
-    UpdateSystemResources {
-        cpu_usage: f32,
-        memory_usage: f32,
-    },
+    UpdateSystemResources { cpu_usage: f32, memory_usage: f32 },
 
     /// 获取状态
     Get {
@@ -50,15 +35,13 @@ pub enum SystemStatusCommand {
     },
 
     /// 健康检查（Ping）
-    HealthCheck {
-        reply: oneshot::Sender<()>,
-    },
+    HealthCheck { reply: oneshot::Sender<()> },
 }
 
 /// 系统状态Actor
 pub struct SystemStatusActor {
     receiver: mpsc::Receiver<SystemStatusCommand>,
-    status: SystemStatus,  // 无需RwLock
+    status: SystemStatus, // 无需RwLock
 }
 
 impl SystemStatusActor {
@@ -109,7 +92,10 @@ impl SystemStatusActor {
                     self.status.last_error = error;
                 }
 
-                SystemStatusCommand::UpdateSystemResources { cpu_usage, memory_usage } => {
+                SystemStatusCommand::UpdateSystemResources {
+                    cpu_usage,
+                    memory_usage,
+                } => {
                     self.status.cpu_usage = cpu_usage;
                     self.status.memory_usage = memory_usage;
                 }
@@ -138,46 +124,70 @@ pub struct SystemStatusHandle {
 impl SystemStatusHandle {
     /// 设置截屏状态
     pub async fn set_capturing(&self, is_capturing: bool) {
-        let _ = self.sender.send(SystemStatusCommand::UpdateCapturing { is_capturing }).await;
+        let _ = self
+            .sender
+            .send(SystemStatusCommand::UpdateCapturing { is_capturing })
+            .await;
     }
 
     /// 设置处理状态
     pub async fn set_processing(&self, is_processing: bool) {
-        let _ = self.sender.send(SystemStatusCommand::UpdateProcessing { is_processing }).await;
+        let _ = self
+            .sender
+            .send(SystemStatusCommand::UpdateProcessing { is_processing })
+            .await;
     }
 
     /// 更新最后截屏时间
     pub async fn update_last_capture_time(&self, time: DateTime<Utc>) {
-        let _ = self.sender.send(SystemStatusCommand::UpdateLastCaptureTime { time }).await;
+        let _ = self
+            .sender
+            .send(SystemStatusCommand::UpdateLastCaptureTime { time })
+            .await;
     }
 
     /// 更新最后处理时间
     pub async fn update_last_process_time(&self, time: DateTime<Utc>) {
-        let _ = self.sender.send(SystemStatusCommand::UpdateLastProcessTime { time }).await;
+        let _ = self
+            .sender
+            .send(SystemStatusCommand::UpdateLastProcessTime { time })
+            .await;
     }
 
     /// 更新会话帧数
     pub async fn update_session_frames(&self, count: usize) {
-        let _ = self.sender.send(SystemStatusCommand::UpdateSessionFrames { count }).await;
+        let _ = self
+            .sender
+            .send(SystemStatusCommand::UpdateSessionFrames { count })
+            .await;
     }
 
     /// 设置错误信息
     pub async fn set_error(&self, error: Option<String>) {
-        let _ = self.sender.send(SystemStatusCommand::SetError { error }).await;
+        let _ = self
+            .sender
+            .send(SystemStatusCommand::SetError { error })
+            .await;
     }
 
     /// 更新系统资源占用
     pub async fn update_system_resources(&self, cpu_usage: f32, memory_usage: f32) {
-        let _ = self.sender.send(SystemStatusCommand::UpdateSystemResources {
-            cpu_usage,
-            memory_usage
-        }).await;
+        let _ = self
+            .sender
+            .send(SystemStatusCommand::UpdateSystemResources {
+                cpu_usage,
+                memory_usage,
+            })
+            .await;
     }
 
     /// 获取系统状态
     pub async fn get(&self) -> SystemStatus {
         let (reply, rx) = oneshot::channel();
-        self.sender.send(SystemStatusCommand::Get { reply }).await.ok();
+        self.sender
+            .send(SystemStatusCommand::Get { reply })
+            .await
+            .ok();
         rx.await.unwrap_or_default()
     }
 
@@ -189,7 +199,8 @@ impl SystemStatusHandle {
         let (reply, rx) = oneshot::channel();
 
         // 尝试发送健康检查命令
-        if self.sender
+        if self
+            .sender
             .send(SystemStatusCommand::HealthCheck { reply })
             .await
             .is_err()
@@ -199,10 +210,7 @@ impl SystemStatusHandle {
         }
 
         // 等待响应，超时5秒
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            rx
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
             Ok(Ok(())) => {
                 tracing::debug!("System Status Actor 健康检查成功");
                 true

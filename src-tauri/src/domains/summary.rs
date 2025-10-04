@@ -93,7 +93,11 @@ impl SummaryGenerator {
     /// # 参数
     /// * `date` - 日期 (YYYY-MM-DD)
     /// * `force_refresh` - 是否强制重新生成（跳过缓存）
-    pub async fn generate_day_summary(&self, date: &str, force_refresh: bool) -> Result<DaySummary, String> {
+    pub async fn generate_day_summary(
+        &self,
+        date: &str,
+        force_refresh: bool,
+    ) -> Result<DaySummary, String> {
         info!("生成每日总结: {} (force_refresh={})", date, force_refresh);
 
         // 如果不是强制刷新，先尝试从数据库读取缓存
@@ -103,12 +107,12 @@ impl SummaryGenerator {
                     info!("使用缓存的每日总结: {}", date);
 
                     // 反序列化 JSON 字段
-                    let device_stats = serde_json::from_str(&cached.device_stats)
-                        .unwrap_or_default();
-                    let parallel_work = serde_json::from_str(&cached.parallel_work)
-                        .unwrap_or_default();
-                    let usage_patterns = serde_json::from_str(&cached.usage_patterns)
-                        .unwrap_or_default();
+                    let device_stats =
+                        serde_json::from_str(&cached.device_stats).unwrap_or_default();
+                    let parallel_work =
+                        serde_json::from_str(&cached.parallel_work).unwrap_or_default();
+                    let usage_patterns =
+                        serde_json::from_str(&cached.usage_patterns).unwrap_or_default();
 
                     return Ok(DaySummary {
                         date: cached.date.format("%Y-%m-%d").to_string(),
@@ -163,9 +167,7 @@ impl SummaryGenerator {
         let usage_patterns = self.analyze_usage_patterns(&sessions, active_device_count);
 
         // 生成总结文本
-        let summary_text = self
-            .generate_summary_text(date, &sessions)
-            .await;
+        let summary_text = self.generate_summary_text(date, &sessions).await;
 
         let summary = DaySummary {
             date: date.to_string(),
@@ -205,7 +207,10 @@ impl SummaryGenerator {
     }
 
     /// 计算设备统计
-    async fn calculate_device_stats(&self, sessions: &[Session]) -> Result<Vec<DeviceStat>, String> {
+    async fn calculate_device_stats(
+        &self,
+        sessions: &[Session],
+    ) -> Result<Vec<DeviceStat>, String> {
         let mut device_map: HashMap<String, (String, i64, i64)> = HashMap::new();
 
         for session in sessions {
@@ -233,11 +238,10 @@ impl SummaryGenerator {
                 duration
             };
 
-            let entry = device_map.entry(device_name.clone()).or_insert((
-                device_type.clone(),
-                0,
-                0,
-            ));
+            let entry =
+                device_map
+                    .entry(device_name.clone())
+                    .or_insert((device_type.clone(), 0, 0));
             entry.1 += duration;
             entry.2 += screenshot_count;
         }
@@ -379,11 +383,7 @@ impl SummaryGenerator {
         {
             patterns.push(UsagePattern {
                 label: "最活跃时段".to_string(),
-                value: format!(
-                    "{:02}:00 - {:02}:00",
-                    peak_hour,
-                    (peak_hour + 1) % 24
-                ),
+                value: format!("{:02}:00 - {:02}:00", peak_hour, (peak_hour + 1) % 24),
             });
         }
 
@@ -437,11 +437,7 @@ impl SummaryGenerator {
     }
 
     /// 生成总结文本（优先使用LLM，fallback到规则）
-    async fn generate_summary_text(
-        &self,
-        date: &str,
-        sessions: &[Session],
-    ) -> String {
+    async fn generate_summary_text(&self, date: &str, sessions: &[Session]) -> String {
         // 计算总时长
         let total_minutes: i64 = sessions
             .iter()
@@ -451,11 +447,7 @@ impl SummaryGenerator {
         // 如果有 LLM handle，尝试使用 LLM 生成
         if let Some(llm_handle) = &self.llm_handle {
             match self
-                .generate_summary_with_llm(
-                    llm_handle,
-                    date,
-                    sessions,
-                )
+                .generate_summary_with_llm(llm_handle, date, sessions)
                 .await
             {
                 Ok(summary) => {

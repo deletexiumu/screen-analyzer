@@ -247,13 +247,10 @@ impl VideoProcessor {
         info!("开始执行FFmpeg命令，可能需要一些时间...");
 
         // 执行命令，设置10分钟超时
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(600),
-            command.output()
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("FFmpeg 执行超时(10分钟)"))?
-        .map_err(|e| anyhow::anyhow!("FFmpeg 执行失败: {}", e))?;
+        let output = tokio::time::timeout(std::time::Duration::from_secs(600), command.output())
+            .await
+            .map_err(|_| anyhow::anyhow!("FFmpeg 执行超时(10分钟)"))?
+            .map_err(|e| anyhow::anyhow!("FFmpeg 执行失败: {}", e))?;
 
         info!("FFmpeg命令执行完成");
 

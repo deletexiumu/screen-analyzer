@@ -109,7 +109,9 @@ impl<S: Subscriber> Layer<S> for TauriLogLayer {
         event.record(&mut visitor);
 
         // 生成时间戳
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let timestamp = chrono::Local::now()
+            .format("%Y-%m-%d %H:%M:%S%.3f")
+            .to_string();
 
         // 创建日志消息
         let log = LogMessage {
@@ -141,8 +143,7 @@ pub fn init_with_broadcaster(
         PathBuf::from(appdata).join("screen-analyzer").join("logs")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join(".local/share/screen-analyzer/logs")
+        PathBuf::from(home).join(".local/share/screen-analyzer/logs")
     };
 
     // 创建日志目录

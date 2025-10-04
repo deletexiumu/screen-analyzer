@@ -160,7 +160,9 @@ impl Database {
     }
 
     pub async fn delete_llm_calls_by_session(&self, session_id: i64) -> Result<()> {
-        self.repository.delete_llm_calls_by_session(session_id).await
+        self.repository
+            .delete_llm_calls_by_session(session_id)
+            .await
     }
 
     // ========== 视频分段 ==========
@@ -261,7 +263,6 @@ impl Database {
     pub async fn new(db_path: &str) -> Result<Self> {
         Self::new_sqlite(db_path).await
     }
-
 
     // ========== 数据同步功能 ==========
 

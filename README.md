@@ -34,7 +34,10 @@
 
 #### 基础功能
 - 🎬 **自动截屏录制**：每秒自动捕获屏幕，记录您的工作状态
-- 🤖 **AI 智能分析**：使用 LLM（支持通义千问、OpenAI 等）自动分析活动内容
+- 🤖 **AI 智能分析**：多 LLM 提供商支持
+  - 🌟 **Claude Agent**：支持 Claude 官方订阅账号（无需 API Key）
+  - 🇨🇳 **国内大模型**：支持 Kimi、GLM-4 等兼容 Claude Agent 的模型
+  - 🔧 **通义千问**：阿里云通义千问 VL 多模态模型
 - 📹 **视频生成**：将截屏序列生成时间线视频，支持快速回顾
 - 📊 **活动时间线**：可视化展示一天的工作流程和活动分布
 - 🗂️ **自动分类**：智能识别工作、学习、娱乐等不同活动类型
@@ -153,9 +156,24 @@ npm run tauri build -- --target x86_64-unknown-linux-gnu
    - 系统偏好设置 → 安全性与隐私 → 隐私 → 屏幕录制
 
 2. **配置 LLM API**
-   - 打开设置界面
-   - 选择 LLM 提供商（支持通义千问、OpenAI、Anthropic 等）
-   - 输入 API Key 和相关配置
+
+   **选项 1: Claude Agent（推荐）**
+   - 打开设置界面 → AI 设置
+   - 选择 "Claude" 作为提供商
+   - 模型选择：
+     - `claude-sonnet-4-5` 或 `claude-opus-4-1`（官方模型，需 Claude 订阅）
+     - `kimi`（月之暗面 Kimi）
+     - `glm-4-plus` 或 `glm-4-air`（智谱 AI）
+     - 或手动输入其他兼容 Claude Agent 的模型名称
+   - API Key 配置（可选）：
+     - 留空：使用 Claude CLI 登录的订阅账号凭据
+     - 填写：使用自定义 API Key（国内模型通常需要）
+   - 点击"测试连接"验证配置
+
+   **选项 2: 通义千问**
+   - 选择 "通义千问 (Qwen)" 作为提供商
+   - 在[阿里云DashScope](https://dashscope.console.aliyun.com/)获取 API Key
+   - 输入 API Key 和模型配置
    - 测试连接
 
 3. **配置 Notion 集成**（可选）
@@ -285,11 +303,37 @@ sudo systemctl start screen-analyzer
 ### Q: 应用占用空间太大怎么办？
 A: 可以在设置中减少保留天数，或手动清理历史数据。建议保留3-7天的数据。
 
+### Q: 如何使用 Claude Agent？
+A:
+**使用 Claude 官方订阅账号：**
+1. 确保已登录 Claude CLI（运行 `claude login`）
+2. 在应用设置中选择 "Claude" 提供商
+3. 选择官方模型（如 `claude-sonnet-4-5`）
+4. **API Key 留空**
+5. 测试连接 - 应用会自动使用 CLI 登录凭据
+
+**使用国内大模型（Kimi、GLM-4 等）：**
+1. 在对应平台获取 API Key：
+   - Kimi: [月之暗面开放平台](https://platform.moonshot.cn/)
+   - GLM-4: [智谱开放平台](https://open.bigmodel.cn/)
+2. 在应用设置中选择 "Claude" 提供商
+3. 选择或手动输入模型名称（如 `kimi`、`glm-4-plus`）
+4. 填写 API Key
+5. 测试连接
+
+**提示**：Claude Agent SDK 提供了统一的接口，支持所有兼容 Claude Agent 协议的模型。
+
 ### Q: 为什么 AI 分析失败？
 A: 请检查：
-1. API Key 是否正确配置
-2. 网络连接是否正常
-3. API 额度是否充足
+1. **Claude**:
+   - 如使用订阅账号：确保已运行 `claude login` 登录
+   - 如使用 API Key：检查 Key 是否正确且有余额
+   - 确保选择了正确的模型名称
+2. **通义千问**:
+   - API Key 是否正确配置
+   - 网络连接是否正常
+   - API 额度是否充足
+3. 查看应用日志了解详细错误信息
 
 ### Q: macOS 提示没有权限？
 A: 需要在系统偏好设置中授予"屏幕录制"权限，授权后需要重启应用。
@@ -362,9 +406,12 @@ A:
 - **图像处理**: image crate (压缩、缩放、黑屏检测)
 - **视频生成**: FFmpeg (内置二进制)
 - **LLM 集成**:
-  - 通义千问 (Qwen)
-  - OpenAI GPT-4 Vision
-  - Anthropic Claude
+  - **Claude Agent SDK**: 支持 Claude 官方订阅和兼容模型
+    - 官方模型：Claude Sonnet 4.5、Claude Opus 4.1
+    - 国内模型：Kimi（月之暗面）、GLM-4（智谱 AI）
+    - 支持自定义模型（兼容 Claude Agent 协议）
+  - **通义千问 (Qwen)**: 阿里云多模态视觉模型
+  - **插件化架构**: 易于扩展新的 LLM 提供商
 - **Notion API**: reqwest + multipart
 - **系统监控**: sysinfo (CPU、内存)
 - **日志**: tracing + tracing-subscriber

@@ -716,9 +716,11 @@ impl DatabaseRepository for SqliteRepository {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_frames_session_id ON frames(session_id)")
             .execute(&self.pool)
             .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_sessions_start_end ON sessions(start_time, end_time)")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_start_end ON sessions(start_time, end_time)",
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_frames_session_timestamp ON frames(session_id, timestamp)")
             .execute(&self.pool)
             .await?;
@@ -923,8 +925,11 @@ impl DatabaseRepository for SqliteRepository {
         // 计算时区偏移量（秒）
         let local_offset_seconds = Local::now().offset().local_minus_utc();
 
-        info!("开始时区迁移：将 UTC 时间转换为本地时间（偏移 {} 秒 / {} 小时）",
-              local_offset_seconds, local_offset_seconds / 3600);
+        info!(
+            "开始时区迁移：将 UTC 时间转换为本地时间（偏移 {} 秒 / {} 小时）",
+            local_offset_seconds,
+            local_offset_seconds / 3600
+        );
 
         // SQLite 使用 datetime() 函数和字符串偏移
         let offset_str = format!("{} seconds", local_offset_seconds);

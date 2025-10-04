@@ -2,12 +2,13 @@
 //
 // 用消息传递替代锁机制，消除Arc<Mutex<LLMManager>>的锁竞争
 
-use tokio::sync::{mpsc, oneshot};
+use crate::llm::{LLMConfig, LLMManager, QwenConfig, SessionBrief, SessionSummary};
 use anyhow::Result;
-use crate::llm::{LLMManager, LLMConfig, QwenConfig, SessionSummary, SessionBrief};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::llm::{TimelineAnalysis, TimelineCard, VideoSegment};
 use crate::storage::Database;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 /// LLM管理器命令
@@ -25,18 +26,18 @@ pub enum LLMCommand {
     },
 
     /// 获取配置
-    GetConfig {
-        reply: oneshot::Sender<LLMConfig>,
-    },
+    GetConfig { reply: oneshot::Sender<LLMConfig> },
 
     /// 设置视频路径
-    SetVideoPath {
-        video_path: Option<String>,
-    },
+    SetVideoPath { video_path: Option<String> },
 
     /// 设置视频速率
-    SetVideoSpeed {
-        speed_multiplier: f32,
+    SetVideoSpeed { speed_multiplier: f32 },
+
+    /// 设置会话时间范围
+    SetSessionWindow {
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
     },
 
     /// 设置provider的数据库连接
@@ -73,22 +74,32 @@ pub enum LLMCommand {
         reply: oneshot::Sender<Result<String>>,
     },
 
-    /// 健康检查（Ping）
-    HealthCheck {
-        reply: oneshot::Sender<()>,
+    /// 切换 LLM provider
+    SwitchProvider {
+        provider: String,
+        reply: oneshot::Sender<Result<()>>,
     },
+
+    /// 配置 Claude provider
+    ConfigureClaude {
+        config: serde_json::Value,
+        reply: oneshot::Sender<Result<()>>,
+    },
+
+    /// 健康检查（Ping）
+    HealthCheck { reply: oneshot::Sender<()> },
 }
 
 /// LLM Manager Actor（无需外层Mutex）
 pub struct LLMManagerActor {
     receiver: mpsc::Receiver<LLMCommand>,
-    manager: LLMManager,  // 直接持有，无需锁
+    manager: LLMManager, // 直接持有，无需锁
 }
 
 impl LLMManagerActor {
     /// 创建新的Actor
     pub fn new(manager: LLMManager) -> (Self, LLMHandle) {
-        let (sender, receiver) = mpsc::channel(200);  // 增加容量到200以支持高负载
+        let (sender, receiver) = mpsc::channel(200); // 增加容量到200以支持高负载
         let actor = Self { receiver, manager };
         let handle = LLMHandle { sender };
         (actor, handle)
@@ -123,6 +134,10 @@ impl LLMManagerActor {
                     self.manager.set_video_speed(speed_multiplier);
                 }
 
+                LLMCommand::SetSessionWindow { start, end } => {
+                    self.manager.set_session_window(start, end);
+                }
+
                 LLMCommand::SetProviderDatabase { db, session_id } => {
                     self.manager.set_provider_database(db, session_id);
                 }
@@ -133,7 +148,8 @@ impl LLMManagerActor {
                     previous_cards,
                     reply,
                 } => {
-                    let result = self.manager
+                    let result = self
+                        .manager
                         .segment_video_and_generate_timeline(frames, duration, previous_cards)
                         .await;
                     let _ = reply.send(result);
@@ -149,7 +165,10 @@ impl LLMManagerActor {
                     previous_cards,
                     reply,
                 } => {
-                    let result = self.manager.generate_timeline(segments, previous_cards).await;
+                    let result = self
+                        .manager
+                        .generate_timeline(segments, previous_cards)
+                        .await;
                     let _ = reply.send(result);
                 }
 
@@ -158,9 +177,17 @@ impl LLMManagerActor {
                     sessions,
                     reply,
                 } => {
-                    let result = self.manager
-                        .generate_day_summary(&date, &sessions)
-                        .await;
+                    let result = self.manager.generate_day_summary(&date, &sessions).await;
+                    let _ = reply.send(result);
+                }
+
+                LLMCommand::SwitchProvider { provider, reply } => {
+                    let result = self.manager.switch_provider(&provider).await;
+                    let _ = reply.send(result);
+                }
+
+                LLMCommand::ConfigureClaude { config, reply } => {
+                    let result = self.manager.configure_claude(config).await;
                     let _ = reply.send(result);
                 }
 
@@ -230,8 +257,25 @@ impl LLMHandle {
         Ok(())
     }
 
+    /// 设置会话时间范围
+    pub async fn set_session_window(
+        &self,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        self.sender
+            .send(LLMCommand::SetSessionWindow { start, end })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        Ok(())
+    }
+
     /// 设置provider的数据库连接
-    pub async fn set_provider_database(&self, db: Arc<Database>, session_id: Option<i64>) -> Result<()> {
+    pub async fn set_provider_database(
+        &self,
+        db: Arc<Database>,
+        session_id: Option<i64>,
+    ) -> Result<()> {
         self.sender
             .send(LLMCommand::SetProviderDatabase { db, session_id })
             .await
@@ -310,6 +354,29 @@ impl LLMHandle {
         rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
     }
 
+    /// 切换 LLM provider
+    pub async fn switch_provider(&self, provider: &str) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::SwitchProvider {
+                provider: provider.to_string(),
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
+    /// 配置 Claude provider
+    pub async fn configure_claude(&self, config: serde_json::Value) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::ConfigureClaude { config, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
     /// 健康检查
     /// 返回true表示Actor正常运行，false表示Actor无响应或已停止
     /// 超时时间为5秒
@@ -318,7 +385,8 @@ impl LLMHandle {
         let (reply, rx) = oneshot::channel();
 
         // 尝试发送健康检查命令
-        if self.sender
+        if self
+            .sender
             .send(LLMCommand::HealthCheck { reply })
             .await
             .is_err()
@@ -328,10 +396,7 @@ impl LLMHandle {
         }
 
         // 等待响应，超时5秒
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            rx
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
             Ok(Ok(())) => {
                 tracing::debug!("LLM Manager Actor 健康检查成功");
                 true

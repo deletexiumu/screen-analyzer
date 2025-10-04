@@ -572,7 +572,11 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         let response_data: QwenResponse = serde_json::from_str(&response_text)?;
 
         // 检查 finish_reason，如果是 "length" 说明达到 token 限制
-        if let Some(finish_reason) = response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) {
+        if let Some(finish_reason) = response_data
+            .choices
+            .get(0)
+            .and_then(|c| c.finish_reason.as_ref())
+        {
             if finish_reason == "length" {
                 warn!("LLM 响应因达到 token 限制而被截断 (finish_reason=length)");
             }
@@ -600,7 +604,12 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         let content = response_data.choices[0].message.content.clone();
 
         // 如果响应被截断，返回错误而不是不完整的 JSON
-        if response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) == Some(&"length".to_string()) {
+        if response_data
+            .choices
+            .get(0)
+            .and_then(|c| c.finish_reason.as_ref())
+            == Some(&"length".to_string())
+        {
             return Err(anyhow::anyhow!(
                 "LLM 响应被截断（达到 max_tokens 限制）。内容长度: {} 字符。请尝试缩短视频时长或联系管理员。",
                 content.len()
@@ -728,7 +737,8 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
 
             // 检测是否是视频过短错误
             if error_text.contains("video file is too short")
-                || error_text.contains("The video file is too short") {
+                || error_text.contains("The video file is too short")
+            {
                 return Err(anyhow::anyhow!("VIDEO_TOO_SHORT: {}", error_text));
             }
 
@@ -741,7 +751,11 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         let response_data: QwenResponse = serde_json::from_str(&response_text)?;
 
         // 检查 finish_reason，如果是 "length" 说明达到 token 限制
-        if let Some(finish_reason) = response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) {
+        if let Some(finish_reason) = response_data
+            .choices
+            .get(0)
+            .and_then(|c| c.finish_reason.as_ref())
+        {
             if finish_reason == "length" {
                 warn!("LLM 响应因达到 token 限制而被截断 (finish_reason=length, 视频模式)");
             }
@@ -769,7 +783,12 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
         let content = response_data.choices[0].message.content.clone();
 
         // 如果响应被截断，返回错误而不是不完整的 JSON
-        if response_data.choices.get(0).and_then(|c| c.finish_reason.as_ref()) == Some(&"length".to_string()) {
+        if response_data
+            .choices
+            .get(0)
+            .and_then(|c| c.finish_reason.as_ref())
+            == Some(&"length".to_string())
+        {
             return Err(anyhow::anyhow!(
                 "LLM 响应被截断（达到 max_tokens 限制，视频模式）。内容长度: {} 字符。请尝试缩短视频时长或联系管理员。",
                 content.len()
@@ -1229,22 +1248,28 @@ impl LLMProvider for QwenProvider {
         date: &str,
         sessions: &[crate::llm::SessionBrief],
     ) -> Result<String> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Qwen API Key未配置")
-        })?;
+        let api_key = self
+            .api_key
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Qwen API Key未配置"))?;
 
         // 构建会话时间线文本
         // 如果会话数量过多，需要智能合并或筛选以控制 token 数量
         let max_sessions_display = 200; // 最多显示50个会话
-        let sessions_to_process: Vec<&crate::llm::SessionBrief> = if sessions.len() > max_sessions_display {
-            info!("会话数量 {} 超过限制，将筛选重要会话", sessions.len());
-            // 按时长排序，选择较长的会话
-            let mut sorted_sessions: Vec<_> = sessions.iter().collect();
-            sorted_sessions.sort_by_key(|s| std::cmp::Reverse((s.end_time - s.start_time).num_minutes()));
-            sorted_sessions.into_iter().take(max_sessions_display).collect()
-        } else {
-            sessions.iter().collect()
-        };
+        let sessions_to_process: Vec<&crate::llm::SessionBrief> =
+            if sessions.len() > max_sessions_display {
+                info!("会话数量 {} 超过限制，将筛选重要会话", sessions.len());
+                // 按时长排序，选择较长的会话
+                let mut sorted_sessions: Vec<_> = sessions.iter().collect();
+                sorted_sessions
+                    .sort_by_key(|s| std::cmp::Reverse((s.end_time - s.start_time).num_minutes()));
+                sorted_sessions
+                    .into_iter()
+                    .take(max_sessions_display)
+                    .collect()
+            } else {
+                sessions.iter().collect()
+            };
 
         let mut sessions_text = String::new();
         for session in sessions_to_process {
@@ -1326,7 +1351,10 @@ impl LLMProvider for QwenProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             error!("Qwen API 错误: {} - {}", status, error_text);
             return Err(anyhow::anyhow!("Qwen API 请求失败: {}", error_text));
         }
@@ -1370,7 +1398,7 @@ struct QwenResponse {
 #[derive(Debug, Deserialize)]
 struct QwenChoice {
     message: QwenMessage,
-    finish_reason: Option<String>,  // 完成原因：stop, length, etc
+    finish_reason: Option<String>, // 完成原因：stop, length, etc
 }
 
 #[derive(Debug, Deserialize)]

@@ -51,7 +51,7 @@ impl MariaDbRepository {
 
         // 检查数据库是否存在
         let db_exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?"
+            "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?",
         )
         .bind(database)
         .fetch_one(&server_pool)
@@ -59,9 +59,12 @@ impl MariaDbRepository {
 
         if db_exists == 0 {
             info!("数据库 '{}' 不存在，正在创建...", database);
-            sqlx::query(&format!("CREATE DATABASE `{}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", database))
-                .execute(&server_pool)
-                .await?;
+            sqlx::query(&format!(
+                "CREATE DATABASE `{}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+                database
+            ))
+            .execute(&server_pool)
+            .await?;
             info!("数据库 '{}' 创建成功", database);
         } else {
             info!("数据库 '{}' 已存在", database);
@@ -90,7 +93,10 @@ impl MariaDbRepository {
             .map_err(|e| {
                 anyhow::anyhow!(
                     "创建 MariaDB 连接池失败 ({}:{}/{}): {}",
-                    host, port, database, e
+                    host,
+                    port,
+                    database,
+                    e
                 )
             })?;
 
@@ -890,12 +896,15 @@ impl DatabaseRepository for MariaDbRepository {
         let _ = sqlx::query("CREATE INDEX idx_frames_session_id ON frames(session_id)")
             .execute(&self.pool)
             .await;
-        let _ = sqlx::query("CREATE INDEX idx_sessions_start_end ON sessions(start_time, end_time)")
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("CREATE INDEX idx_frames_session_timestamp ON frames(session_id, timestamp)")
-            .execute(&self.pool)
-            .await;
+        let _ =
+            sqlx::query("CREATE INDEX idx_sessions_start_end ON sessions(start_time, end_time)")
+                .execute(&self.pool)
+                .await;
+        let _ = sqlx::query(
+            "CREATE INDEX idx_frames_session_timestamp ON frames(session_id, timestamp)",
+        )
+        .execute(&self.pool)
+        .await;
 
         // 创建LLM调用记录表
         sqlx::query(
@@ -995,12 +1004,14 @@ impl DatabaseRepository for MariaDbRepository {
         let _ = sqlx::query("CREATE INDEX idx_llm_calls_created_at ON llm_calls(created_at)")
             .execute(&self.pool)
             .await;
-        let _ = sqlx::query("CREATE INDEX idx_video_segments_session_id ON video_segments(session_id)")
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query("CREATE INDEX idx_timeline_cards_session_id ON timeline_cards(session_id)")
-            .execute(&self.pool)
-            .await;
+        let _ =
+            sqlx::query("CREATE INDEX idx_video_segments_session_id ON video_segments(session_id)")
+                .execute(&self.pool)
+                .await;
+        let _ =
+            sqlx::query("CREATE INDEX idx_timeline_cards_session_id ON timeline_cards(session_id)")
+                .execute(&self.pool)
+                .await;
 
         info!("MariaDB 数据库表初始化完成");
         Ok(())
@@ -1065,14 +1076,17 @@ impl DatabaseRepository for MariaDbRepository {
         // 计算时区偏移量（小时）
         let local_offset = Local::now().offset().local_minus_utc() / 3600;
 
-        info!("开始时区迁移：将 UTC 时间转换为本地时间（偏移 {} 小时）", local_offset);
+        info!(
+            "开始时区迁移：将 UTC 时间转换为本地时间（偏移 {} 小时）",
+            local_offset
+        );
 
         // 更新 sessions 表
         let sessions_updated = sqlx::query(
             "UPDATE sessions SET
              start_time = DATE_ADD(start_time, INTERVAL ? HOUR),
              end_time = DATE_ADD(end_time, INTERVAL ? HOUR),
-             created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
+             created_at = DATE_ADD(created_at, INTERVAL ? HOUR)",
         )
         .bind(local_offset)
         .bind(local_offset)
@@ -1082,26 +1096,24 @@ impl DatabaseRepository for MariaDbRepository {
         .rows_affected();
 
         // 更新 frames 表
-        let frames_updated = sqlx::query(
-            "UPDATE frames SET timestamp = DATE_ADD(timestamp, INTERVAL ? HOUR)"
-        )
-        .bind(local_offset)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let frames_updated =
+            sqlx::query("UPDATE frames SET timestamp = DATE_ADD(timestamp, INTERVAL ? HOUR)")
+                .bind(local_offset)
+                .execute(&self.pool)
+                .await?
+                .rows_affected();
 
         // 更新 llm_calls 表
-        let llm_calls_updated = sqlx::query(
-            "UPDATE llm_calls SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
-        )
-        .bind(local_offset)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let llm_calls_updated =
+            sqlx::query("UPDATE llm_calls SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)")
+                .bind(local_offset)
+                .execute(&self.pool)
+                .await?
+                .rows_affected();
 
         // 更新 video_segments 表
         let video_segments_updated = sqlx::query(
-            "UPDATE video_segments SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
+            "UPDATE video_segments SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)",
         )
         .bind(local_offset)
         .execute(&self.pool)
@@ -1110,7 +1122,7 @@ impl DatabaseRepository for MariaDbRepository {
 
         // 更新 timeline_cards 表
         let timeline_cards_updated = sqlx::query(
-            "UPDATE timeline_cards SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)"
+            "UPDATE timeline_cards SET created_at = DATE_ADD(created_at, INTERVAL ? HOUR)",
         )
         .bind(local_offset)
         .execute(&self.pool)
@@ -1121,7 +1133,7 @@ impl DatabaseRepository for MariaDbRepository {
         let day_summaries_updated = sqlx::query(
             "UPDATE day_summaries SET
              created_at = DATE_ADD(created_at, INTERVAL ? HOUR),
-             updated_at = DATE_ADD(updated_at, INTERVAL ? HOUR)"
+             updated_at = DATE_ADD(updated_at, INTERVAL ? HOUR)",
         )
         .bind(local_offset)
         .bind(local_offset)

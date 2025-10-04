@@ -2,15 +2,13 @@
 //
 // 用消息传递替代Arc<Mutex<CaptureSettings>>，消除锁竞争
 
-use tokio::sync::{mpsc, oneshot};
 use crate::models::CaptureSettings;
+use tokio::sync::{mpsc, oneshot};
 
 /// 截屏设置命令
 pub enum CaptureSettingsCommand {
     /// 更新设置
-    Update {
-        settings: CaptureSettings,
-    },
+    Update { settings: CaptureSettings },
 
     /// 获取设置
     Get {
@@ -18,15 +16,13 @@ pub enum CaptureSettingsCommand {
     },
 
     /// 健康检查（Ping）
-    HealthCheck {
-        reply: oneshot::Sender<()>,
-    },
+    HealthCheck { reply: oneshot::Sender<()> },
 }
 
 /// 截屏设置Actor
 pub struct CaptureSettingsActor {
     receiver: mpsc::Receiver<CaptureSettingsCommand>,
-    settings: CaptureSettings,  // 无需Mutex
+    settings: CaptureSettings, // 无需Mutex
 }
 
 impl CaptureSettingsActor {
@@ -73,13 +69,19 @@ pub struct CaptureSettingsHandle {
 impl CaptureSettingsHandle {
     /// 更新设置
     pub async fn update(&self, settings: CaptureSettings) {
-        let _ = self.sender.send(CaptureSettingsCommand::Update { settings }).await;
+        let _ = self
+            .sender
+            .send(CaptureSettingsCommand::Update { settings })
+            .await;
     }
 
     /// 获取设置
     pub async fn get(&self) -> CaptureSettings {
         let (reply, rx) = oneshot::channel();
-        self.sender.send(CaptureSettingsCommand::Get { reply }).await.ok();
+        self.sender
+            .send(CaptureSettingsCommand::Get { reply })
+            .await
+            .ok();
         rx.await.unwrap_or_default()
     }
 
@@ -91,7 +93,8 @@ impl CaptureSettingsHandle {
         let (reply, rx) = oneshot::channel();
 
         // 尝试发送健康检查命令
-        if self.sender
+        if self
+            .sender
             .send(CaptureSettingsCommand::HealthCheck { reply })
             .await
             .is_err()
@@ -101,10 +104,7 @@ impl CaptureSettingsHandle {
         }
 
         // 等待响应，超时5秒
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            rx
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
             Ok(Ok(())) => {
                 tracing::debug!("Capture Settings Actor 健康检查成功");
                 true

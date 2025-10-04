@@ -74,43 +74,102 @@
       <!-- LLM设置 -->
       <el-tab-pane label="AI设置" name="llm">
         <el-form :model="settings" label-width="140px">
-          <div class="llm-header">
-            <h4 style="margin: 0 0 20px 0; color: #409EFF;">通义千问 (Qwen)</h4>
-          </div>
-
-          <el-form-item label="API Key">
-            <el-input
-              v-model="llmConfig.openai.api_key"
-              type="password"
-              placeholder="sk-..."
-              show-password
-            />
-            <el-button
-              type="primary"
-              size="small"
-              @click="testLLMAPI"
-              :loading="testingAPI"
-              style="margin-left: 10px"
-            >
-              测试连接
-            </el-button>
+          <el-form-item label="AI 提供商">
+            <el-radio-group v-model="settings.llm_provider">
+              <el-radio value="openai">通义千问 (Qwen)</el-radio>
+              <el-radio value="claude">Claude</el-radio>
+            </el-radio-group>
           </el-form-item>
 
-          <el-form-item label="模型">
-            <el-select v-model="llmConfig.openai.model">
-              <el-option value="qwen-vl-max-latest" label="Qwen VL Max (最新版)" />
-              <el-option value="qwen-vl-plus" label="Qwen VL Plus" />
-              <el-option value="qwen-vl-max" label="Qwen VL Max" />
-            </el-select>
-          </el-form-item>
+          <el-divider />
 
-          <el-form-item label="API地址">
-            <el-input
-              v-model="llmConfig.openai.base_url"
-              placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-            />
-            <span class="form-tip">通常不需要修改</span>
-          </el-form-item>
+          <!-- 通义千问配置 -->
+          <template v-if="settings.llm_provider === 'openai'">
+            <div class="llm-header">
+              <h4 style="margin: 0 0 20px 0; color: #409EFF;">通义千问 (Qwen)</h4>
+            </div>
+
+            <el-form-item label="API Key">
+              <el-input
+                v-model="llmConfig.openai.api_key"
+                type="password"
+                placeholder="sk-..."
+                show-password
+              />
+              <el-button
+                type="primary"
+                size="small"
+                @click="testLLMAPI('openai')"
+                :loading="testingAPI"
+                style="margin-left: 10px"
+              >
+                测试连接
+              </el-button>
+            </el-form-item>
+
+            <el-form-item label="模型">
+              <el-select v-model="llmConfig.openai.model">
+                <el-option value="qwen-vl-max-latest" label="Qwen VL Max (最新版)" />
+                <el-option value="qwen-vl-plus" label="Qwen VL Plus" />
+                <el-option value="qwen-vl-max" label="Qwen VL Max" />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="API地址">
+              <el-input
+                v-model="llmConfig.openai.base_url"
+                placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+              />
+              <span class="form-tip">通常不需要修改</span>
+            </el-form-item>
+          </template>
+
+          <!-- Claude 配置 -->
+          <template v-if="settings.llm_provider === 'claude'">
+            <div class="llm-header">
+              <h4 style="margin: 0 0 20px 0; color: #9333EA;">Claude</h4>
+            </div>
+
+            <el-form-item label="API Key">
+              <el-input
+                v-model="llmConfig.claude.api_key"
+                type="password"
+                placeholder="留空则使用 Claude CLI 登录账号"
+                show-password
+              />
+              <el-button
+                type="primary"
+                size="small"
+                @click="testLLMAPI('claude')"
+                :loading="testingAPI"
+                style="margin-left: 10px"
+              >
+                测试连接
+              </el-button>
+              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
+                使用订阅账号时可留空，应用将使用 Claude CLI 的登录凭据
+              </div>
+            </el-form-item>
+
+            <el-form-item label="模型">
+              <el-select
+                v-model="llmConfig.claude.model"
+                filterable
+                allow-create
+                default-first-option
+                placeholder="选择或输入模型名称"
+              >
+                <el-option value="claude-sonnet-4-5" label="Claude Sonnet 4.5 (官方)" />
+                <el-option value="claude-opus-4-1" label="Claude Opus 4.1 (官方)" />
+                <el-option value="kimi" label="Kimi (月之暗面)" />
+                <el-option value="glm-4-plus" label="GLM-4-Plus (智谱)" />
+                <el-option value="glm-4-air" label="GLM-4-Air (智谱)" />
+              </el-select>
+              <div class="form-tip" style="margin-top: 8px;">
+                支持 Claude 官方模型或兼容 Claude Agent 的国内大模型（如 Kimi、GLM 等）
+              </div>
+            </el-form-item>
+          </template>
         </el-form>
       </el-tab-pane>
 
@@ -619,6 +678,10 @@ const llmConfig = reactive({
     api_key: '',
     model: 'qwen-vl-max-latest',
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+  },
+  claude: {
+    api_key: '',
+    model: 'claude-sonnet-4-5'
   }
 })
 
@@ -671,15 +734,20 @@ const formatQuality = (value) => {
 }
 
 // 测试LLM API连接
-const testLLMAPI = async () => {
+const testLLMAPI = async (provider) => {
   testingAPI.value = true
   try {
-    const provider = 'openai'  // 固定使用openai接口（通义千问兼容）
-    const config = llmConfig.openai
+    const config = llmConfig[provider]
 
-    if (!config.api_key) {
+    // OpenAI (Qwen) 必须提供 API Key
+    if (provider === 'openai' && !config.api_key) {
       ElMessage.warning('请先填写API Key')
       return
+    }
+
+    // Claude 可选 API Key（可以使用 CLI 登录凭据）
+    if (provider === 'claude' && !config.api_key) {
+      ElMessage.info('将使用 Claude CLI 登录凭据进行测试')
     }
 
     const result = await invoke('test_llm_api', {
@@ -883,7 +951,7 @@ const saveSettings = async () => {
     // 保存基础设置
     await store.updateConfig({
       retention_days: settings.retention_days,
-      llm_provider: 'openai',  // 固定使用openai接口
+      llm_provider: settings.llm_provider,
       capture_interval: settings.capture_interval,
       summary_interval: settings.summary_interval,
       video_config: videoConfigPayload,
@@ -897,8 +965,9 @@ const saveSettings = async () => {
     // 配置LLM提供商
     if (settings.llm_provider === 'openai' && llmConfig.openai.api_key) {
       await store.configureLLMProvider('openai', llmConfig.openai)
-    } else if (settings.llm_provider === 'anthropic' && llmConfig.anthropic.api_key) {
-      await store.configureLLMProvider('anthropic', llmConfig.anthropic)
+    } else if (settings.llm_provider === 'claude') {
+      // Claude 允许不填写 API key，会使用 CLI 凭据
+      await store.configureLLMProvider('claude', llmConfig.claude)
     }
 
     ElMessage.success('设置已保存，如果修改了数据库配置请重启应用')
@@ -1012,9 +1081,17 @@ const initSettings = () => {
   }
   // 加载LLM配置
   if (llm_config) {
-    llmConfig.openai.api_key = llm_config.api_key || ''
-    llmConfig.openai.model = llm_config.model || 'qwen-vl-max-latest'
-    llmConfig.openai.base_url = llm_config.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+    // 根据当前 provider 加载对应配置
+    const currentProvider = settings.llm_provider || 'openai'
+
+    if (currentProvider === 'openai') {
+      llmConfig.openai.api_key = llm_config.api_key || ''
+      llmConfig.openai.model = llm_config.model || 'qwen-vl-max-latest'
+      llmConfig.openai.base_url = llm_config.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+    } else if (currentProvider === 'claude') {
+      llmConfig.claude.api_key = llm_config.api_key || ''
+      llmConfig.claude.model = llm_config.model || 'claude-sonnet-4-5'
+    }
   }
   // 加载数据库配置
   if (database_config) {
