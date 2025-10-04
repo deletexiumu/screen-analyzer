@@ -355,6 +355,9 @@ impl ClaudeProvider {
             .build();
         options.model = Some(self.model.clone());
         options.include_partial_messages = true;
+        // 确保每次调用都是新会话，不继续之前的对话
+        options.continue_conversation = false;
+        options.resume = None;
         if let Some(api_key) = api_key {
             options.env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
         }
@@ -513,6 +516,9 @@ impl ClaudeProvider {
     /// 3. Markdown 代码块（无语言标记）: ` ```\n[{...}]\n``` `
     /// 4. 包含其他文本的响应，提取 JSON 部分
     fn extract_json(response: &str) -> Result<serde_json::Value> {
+        // 先 trim 去除前后空白字符
+        let response = response.trim();
+
         // 尝试直接解析
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(response) {
             return Ok(value);
@@ -546,8 +552,27 @@ impl ClaudeProvider {
         if let Some(start) = response.find('[').or_else(|| response.find('{')) {
             if let Some(end) = response.rfind(']').or_else(|| response.rfind('}')) {
                 let json_str = &response[start..=end];
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    return Ok(value);
+
+                // 记录提取的内容用于调试
+                tracing::debug!("提取的 JSON 字符串长度: {}", json_str.len());
+                tracing::debug!("提取的 JSON 前100字符: {:?}", json_str.chars().take(100).collect::<String>());
+
+                match serde_json::from_str::<serde_json::Value>(json_str) {
+                    Ok(value) => return Ok(value),
+                    Err(parse_err) => {
+                        tracing::warn!("JSON 解析失败: {}, 尝试清理后重试", parse_err);
+
+                        // 尝试清理字符串（移除不可见字符）
+                        let cleaned = json_str
+                            .chars()
+                            .filter(|c| !c.is_control() || *c == '\n' || *c == '\r' || *c == '\t')
+                            .collect::<String>();
+
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+                            tracing::info!("清理后的 JSON 解析成功");
+                            return Ok(value);
+                        }
+                    }
                 }
             }
         }
@@ -556,29 +581,48 @@ impl ClaudeProvider {
     }
 
     /// 构建视频分段提示词
-    fn build_segment_prompt(&self, duration: u32) -> String {
+    fn build_segment_prompt(&self) -> String {
+        let session_window_info = if let (Some(start), Some(end)) = (
+            self.session_window_start.as_ref(),
+            self.session_window_end.as_ref(),
+        ) {
+            let start_local = start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
+            let end_local = end.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
+            format!(
+                r#"## Session Window (absolute time)
+- Start: {start_local}
+- End: {end_local}
+
+Please use absolute timestamp format: YYYY-MM-DD HH:MM:SS"#
+            )
+        } else {
+            "## Session Window: Not provided. Use relative MM:SS format.".to_string()
+        };
+
         format!(
             r#"# Video Analysis Task
-Analyze these screenshots from a {} minute screen recording session and create meaningful activity segments.
+Analyze these screenshots from a screen recording session and create meaningful activity segments.
+
+{session_window_info}
 
 ## Output Format (JSON only):
 [
   {{
-    "startTimestamp": "00:00",
-    "endTimestamp": "05:00",
+    "startTimestamp": "2025-10-04 18:00:00",
+    "endTimestamp": "2025-10-04 18:05:00",
     "description": "1-3 sentences describing what happened (in Chinese)"
   }}
 ]
 
 ## Requirements:
-- Create 2-5 segments that cover the full {} minutes
-- Use MM:SS format for timestamps
+- Create 2-5 segments that cover the full recording period
+- Use absolute timestamp format: YYYY-MM-DD HH:MM:SS
 - Group related activities together
 - Write descriptions in Chinese
 - **CRITICAL**: Return ONLY the JSON array, NO markdown formatting, NO code blocks, NO ```json markers
 - Output must be valid JSON that can be parsed directly
 - Do NOT wrap the JSON in any markdown syntax"#,
-            duration, duration
+            session_window_info = session_window_info
         )
     }
 
@@ -597,15 +641,14 @@ Analyze these screenshots from a {} minute screen recording session and create m
             let start_local = start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             let end_local = end.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             format!(
-                "## Session Window (absolute)
-- start: {start_local}
-- end: {end_local}
+                "## Session Window (absolute time)
+- Start: {start_local}
+- End: {end_local}
 
-请牢记：所有输入的时间戳（如 03:30）都是相对于上述 startTime 的 MM:SS 偏移。",
+请使用绝对时间格式: YYYY-MM-DD HH:MM:SS",
             )
         } else {
-            "## Session Window (absolute)
-- 未提供绝对时间，请仍将所有输入时间视为相对于会话起点的 MM:SS 偏移。"
+            "## Session Window: 未提供绝对时间，请使用相对时间 MM:SS 格式。"
                 .to_string()
         };
 
@@ -617,10 +660,10 @@ Analyze these screenshots from a {} minute screen recording session and create m
 ## Rules:
 - Output must be a JSON array with **exactly one** object (数组长度必须为1)。
 - 每个字段必须存在：`startTime`、`endTime`、`category`、`subcategory`、`title`、`summary`、`detailedSummary`、`distractions`、`appSites`、`appSites.primary`、`appSites.secondary`、`isUpdated`。
-- `startTime` = 各 segment 最早开始时间 (MM:SS 相对时间)，`endTime` = 各 segment 最晚结束时间 (MM:SS 相对时间)。
+- `startTime` = 各 segment 最早开始时间 (YYYY-MM-DD HH:MM:SS 绝对时间)，`endTime` = 各 segment 最晚结束时间 (YYYY-MM-DD HH:MM:SS 绝对时间)。
 - `category` 必须从 [work, communication, learning, personal, idle, other] 中选择最符合的一个。
-- 所有文本字段使用中文描述，`summary` 为一句话概述，`detailedSummary` 需包含各 segment 的时间点与活动内容，并引用 MM:SS 相对时间（例如 "03:30-07:00"）。
-- `distractions` 必须是数组，若无干扰请返回 []；如果存在干扰对象，必须包含 `startTime`、`endTime`、`title`、`summary` 字段，均使用 MM:SS 相对时间和中文描述。
+- 所有文本字段使用中文描述，`summary` 为一句话概述，`detailedSummary` 需包含各 segment 的时间点与活动内容，并引用绝对时间（例如 "2025-10-04 18:03:30-18:07:00"）。
+- `distractions` 必须是数组，若无干扰请返回 []；如果存在干扰对象，必须包含 `startTime`、`endTime`、`title`、`summary` 字段，均使用 YYYY-MM-DD HH:MM:SS 绝对时间和中文描述。
 - `appSites.secondary` 必须是数组，若无元素返回 []，不要使用字符串。
 - 如果识别到主要应用/站点，请填写 `appSites.primary`。
 - 输出结果禁止使用 Markdown 或代码块标记（不要包裹 ```json）。
@@ -632,8 +675,8 @@ Analyze these screenshots from a {} minute screen recording session and create m
 ## Output Format (JSON only):
 [
   {{
-    "startTime": "00:00",
-    "endTime": "30:00",
+    "startTime": "2025-10-04 18:00:00",
+    "endTime": "2025-10-04 18:30:00",
     "category": "work",
     "subcategory": "Development",
     "title": "功能开发",
@@ -641,14 +684,14 @@ Analyze these screenshots from a {} minute screen recording session and create m
     "detailedSummary": "连续工作，完成了功能模块的开发和测试",
     "distractions": [],
     "appSites": {{
-      "primary": "vscode",
+      "primary": "visualstudio.com",
       "secondary": ["github.com"]
     }},
     "isUpdated": false
   }}
 ]
 
-Return ONLY the JSON array (确保startTime/endTime等字段存在，并保持相对时间格式)。"#,
+Return ONLY the JSON array (确保startTime/endTime等字段存在，并使用绝对时间格式 YYYY-MM-DD HH:MM:SS)。"#,
             session_window_info = session_window_info,
             previous_cards_json = previous_cards_json
         )
@@ -914,7 +957,7 @@ Return ONLY the JSON object."#
         }
 
         // 添加文本提示
-        let prompt = self.build_segment_prompt(duration);
+        let prompt = self.build_segment_prompt();
         user_content.push(json!({
             "type": "text",
             "text": prompt
@@ -931,6 +974,22 @@ Return ONLY the JSON object."#
             Ok(value) => value,
             Err(err) => {
                 info!("Claude segment_video 原始响应: {}", response);
+                // 添加更详细的调试信息
+                info!("响应长度: {} 字节", response.len());
+                info!("响应前50字符: {:?}", response.chars().take(50).collect::<String>());
+                if response.len() > 50 {
+                    info!("响应后50字符: {:?}", response.chars().rev().take(50).collect::<String>());
+                }
+                // 尝试手动提取 JSON
+                if let Some(start) = response.find('[') {
+                    if let Some(end) = response.rfind(']') {
+                        let json_str = &response[start..=end];
+                        info!("提取的 JSON 长度: {}", json_str.len());
+                        if let Err(parse_err) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            error!("手动提取的 JSON 解析失败: {}", parse_err);
+                        }
+                    }
+                }
                 return Err(err);
             }
         };
