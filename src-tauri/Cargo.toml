@@ -30,7 +30,7 @@ image = "0.24"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "mysql", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.11", features = ["json", "multipart"] }
-claude-agent-sdk = { version = "0.1.1", features = ["http"] }
+claude-agent-sdk = { path = "vendor/claude-agent-sdk", features = ["http"] }
 async-trait = "0.1"
 base64 = "0.22"
 anyhow = "1.0"
@@ -43,6 +43,7 @@ time = { version = "0.3.44", features = ["formatting", "local-offset", "macros"]
 whoami = "1.4"  # 获取设备信息
 tempfile = "3.23.0"  # macOS 截图需要临时文件
 sysinfo = "0.31"  # 获取系统信息（CPU、内存等）
+regex = "1"  # 正则表达式（用于时间格式转换）
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"  # Windows 注册表访问（用于获取系统代理）

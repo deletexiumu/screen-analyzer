@@ -135,18 +135,23 @@ impl ClaudeProvider {
                 .to_str()
                 .ok_or_else(|| anyhow!("无法转换输出路径为字符串"))?;
 
+            // 添加锐化滤镜（unsharp=5:5:0.8:5:5:0.0）
+            // 参数说明：luma_msize_x:luma_msize_y:luma_amount:chroma_msize_x:chroma_msize_y:chroma_amount
+            // luma_amount=0.8 提供适度锐化，避免过度锐化产生噪点
+            let filter_with_sharpen = format!("{},unsharp=5:5:0.8:5:5:0.0", filter);
+
             let mut command = tokio::process::Command::new(ffmpeg_path);
             command
                 .arg("-i")
                 .arg(video_path)
                 .arg("-vf")
-                .arg(filter)
+                .arg(filter_with_sharpen)
                 .arg("-vsync")
                 .arg("vfr")
                 .arg("-frames:v")
                 .arg(target_frames.to_string())
                 .arg("-q:v")
-                .arg("2")
+                .arg("6") // JPEG质量：2=最高质量，10=最低质量。6提供良好的压缩比和质量平衡
                 .arg(pattern_str)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
@@ -260,7 +265,10 @@ impl ClaudeProvider {
         let mut last_error = None;
 
         for attempt in 1..=MAX_RETRIES {
-            match self.call_claude_api(system_prompt.clone(), user_content.clone(), call_type).await {
+            match self
+                .call_claude_api(system_prompt.clone(), user_content.clone(), call_type)
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     let error_msg = e.to_string();
@@ -277,7 +285,8 @@ impl ClaudeProvider {
                         // 如果不是最后一次尝试，等待后重试
                         if attempt < MAX_RETRIES {
                             info!("等待 {} 秒后重试...", RETRY_DELAY_SECS);
-                            tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_DELAY_SECS))
+                                .await;
                         }
                     } else {
                         // 非超时错误，直接返回
@@ -309,7 +318,46 @@ impl ClaudeProvider {
         let start_time = std::time::Instant::now();
         self.reset_call_id(call_type);
 
-        info!("调用 Claude Agent SDK: {}", call_type);
+        // 计算请求大小
+        let mut total_image_bytes = 0usize;
+        let mut image_count = 0usize;
+        let mut text_bytes = 0usize;
+
+        for item in &user_content {
+            if let Some(item_type) = item.get("type").and_then(|v| v.as_str()) {
+                match item_type {
+                    "image" => {
+                        image_count += 1;
+                        if let Some(data) = item
+                            .get("source")
+                            .and_then(|s| s.get("data"))
+                            .and_then(|d| d.as_str())
+                        {
+                            total_image_bytes += data.len();
+                        }
+                    }
+                    "text" => {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            text_bytes += text.len();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let request_body_bytes = serde_json::to_string(&user_content)
+            .map(|s| s.len())
+            .unwrap_or(0);
+
+        info!(
+            "调用 Claude Agent SDK: {} | 图片: {} 张 ({:.2} MB base64) | 文本: {:.2} KB | 总请求体: {:.2} MB",
+            call_type,
+            image_count,
+            total_image_bytes as f64 / 1024.0 / 1024.0,
+            text_bytes as f64 / 1024.0,
+            request_body_bytes as f64 / 1024.0 / 1024.0
+        );
 
         let message_payload = json!({
             "type": "user",
@@ -339,7 +387,8 @@ impl ClaudeProvider {
                 "mode": "stream"
             })
             .to_string(),
-            request_body: request_snapshot.to_string(),
+            // 使用 sanitize_request_body 清理图片 base64 数据
+            request_body: crate::llm::sanitize_request_body(&request_snapshot),
             response_headers: None,
             response_body: None,
             status_code: None,
@@ -358,8 +407,44 @@ impl ClaudeProvider {
         // 确保每次调用都是新会话，不继续之前的对话
         options.continue_conversation = false;
         options.resume = None;
+        let stream_timeout_secs = std::env::var("CLAUDE_AGENT_STREAM_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(180);
+        options.stream_timeout_secs = Some(stream_timeout_secs);
+        info!("Claude Agent 流读取超时: {} 秒", stream_timeout_secs);
         if let Some(api_key) = api_key {
             options.env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
+        }
+
+        // 传递代理设置到子进程
+        let mut proxy_configured = false;
+        if let Ok(http_proxy) = std::env::var("HTTP_PROXY") {
+            options
+                .env
+                .insert("HTTP_PROXY".to_string(), http_proxy.clone());
+            options
+                .env
+                .insert("http_proxy".to_string(), http_proxy.clone());
+            info!("Claude Agent 使用 HTTP 代理: {}", http_proxy);
+            proxy_configured = true;
+        }
+        if let Ok(https_proxy) = std::env::var("HTTPS_PROXY") {
+            options
+                .env
+                .insert("HTTPS_PROXY".to_string(), https_proxy.clone());
+            options
+                .env
+                .insert("https_proxy".to_string(), https_proxy.clone());
+            info!("Claude Agent 使用 HTTPS 代理: {}", https_proxy);
+            proxy_configured = true;
+        }
+        if let Ok(no_proxy) = std::env::var("NO_PROXY") {
+            options.env.insert("NO_PROXY".to_string(), no_proxy.clone());
+            options.env.insert("no_proxy".to_string(), no_proxy);
+        }
+        if !proxy_configured {
+            info!("Claude Agent 未检测到代理配置，直连");
         }
 
         let mut transport = SubprocessTransport::new(PromptInput::Stream, options, None)
@@ -555,7 +640,10 @@ impl ClaudeProvider {
 
                 // 记录提取的内容用于调试
                 tracing::debug!("提取的 JSON 字符串长度: {}", json_str.len());
-                tracing::debug!("提取的 JSON 前100字符: {:?}", json_str.chars().take(100).collect::<String>());
+                tracing::debug!(
+                    "提取的 JSON 前100字符: {:?}",
+                    json_str.chars().take(100).collect::<String>()
+                );
 
                 match serde_json::from_str::<serde_json::Value>(json_str) {
                     Ok(value) => return Ok(value),
@@ -581,7 +669,7 @@ impl ClaudeProvider {
     }
 
     /// 构建视频分段提示词
-    fn build_segment_prompt(&self) -> String {
+    fn build_segment_prompt(&self, duration: u32) -> String {
         let session_window_info = if let (Some(start), Some(end)) = (
             self.session_window_start.as_ref(),
             self.session_window_end.as_ref(),
@@ -589,40 +677,48 @@ impl ClaudeProvider {
             let start_local = start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             let end_local = end.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             format!(
-                r#"## Session Window (absolute time)
-- Start: {start_local}
-- End: {end_local}
-
-Please use absolute timestamp format: YYYY-MM-DD HH:MM:SS"#
+                r#"## Session Context (for reference only):
+- Actual start time: {start_local}
+- Actual end time: {end_local}
+- Note: These are absolute times for context. Your output should use relative MM:SS format."#
             )
         } else {
-            "## Session Window: Not provided. Use relative MM:SS format.".to_string()
+            "## Session Context: Not provided.".to_string()
         };
 
         format!(
             r#"# Video Analysis Task
 Analyze these screenshots from a screen recording session and create meaningful activity segments.
 
-{session_window_info}
+{}
+
+## CRITICAL TIME FORMAT:
+- This is a {} minute screen recording
+- Use relative time format: MM:SS (minutes:seconds)
+- Video time 00:00 to {:02}:00 represents the session duration
+- Example: "00:00" = start, "05:30" = 5 minutes 30 seconds, "{:02}:00" = end
 
 ## Output Format (JSON only):
 [
   {{
-    "startTimestamp": "2025-10-04 18:00:00",
-    "endTimestamp": "2025-10-04 18:05:00",
+    "startTimestamp": "00:00",
+    "endTimestamp": "05:00",
     "description": "1-3 sentences describing what happened (in Chinese)"
   }}
 ]
 
 ## Requirements:
 - Create 2-5 segments that cover the full recording period
-- Use absolute timestamp format: YYYY-MM-DD HH:MM:SS
+- Use relative timestamp format: MM:SS (分钟:秒)
 - Group related activities together
 - Write descriptions in Chinese
 - **CRITICAL**: Return ONLY the JSON array, NO markdown formatting, NO code blocks, NO ```json markers
 - Output must be valid JSON that can be parsed directly
 - Do NOT wrap the JSON in any markdown syntax"#,
-            session_window_info = session_window_info
+            session_window_info,
+            duration,
+            duration,
+            duration
         )
     }
 
@@ -641,42 +737,46 @@ Analyze these screenshots from a screen recording session and create meaningful 
             let start_local = start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             let end_local = end.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             format!(
-                "## Session Window (absolute time)
-- Start: {start_local}
-- End: {end_local}
-
-请使用绝对时间格式: YYYY-MM-DD HH:MM:SS",
+                "## Session Context (for reference only):
+- Actual start time: {start_local}
+- Actual end time: {end_local}
+- Note: These are absolute times for context. Your output should use relative MM:SS format.",
             )
         } else {
-            "## Session Window: 未提供绝对时间，请使用相对时间 MM:SS 格式。"
-                .to_string()
+            "## Session Context: Not provided.".to_string()
         };
 
         format!(
             r#"Create a SINGLE timeline activity card that summarises the entire session.
 
-{session_window_info}
+{}
+
+## CRITICAL TIME FORMAT:
+- Input segments use relative time format: MM:SS (minutes:seconds)
+- Your output MUST also use MM:SS format
+- Example: "00:00", "05:30", "15:00"
+- DO NOT use absolute time (YYYY-MM-DD HH:MM:SS)
 
 ## Rules:
 - Output must be a JSON array with **exactly one** object (数组长度必须为1)。
 - 每个字段必须存在：`startTime`、`endTime`、`category`、`subcategory`、`title`、`summary`、`detailedSummary`、`distractions`、`appSites`、`appSites.primary`、`appSites.secondary`、`isUpdated`。
-- `startTime` = 各 segment 最早开始时间 (YYYY-MM-DD HH:MM:SS 绝对时间)，`endTime` = 各 segment 最晚结束时间 (YYYY-MM-DD HH:MM:SS 绝对时间)。
+- `startTime` = 各 segment 最早开始时间 (MM:SS 相对时间)，`endTime` = 各 segment 最晚结束时间 (MM:SS 相对时间)。
 - `category` 必须从 [work, communication, learning, personal, idle, other] 中选择最符合的一个。
-- 所有文本字段使用中文描述，`summary` 为一句话概述，`detailedSummary` 需包含各 segment 的时间点与活动内容，并引用绝对时间（例如 "2025-10-04 18:03:30-18:07:00"）。
-- `distractions` 必须是数组，若无干扰请返回 []；如果存在干扰对象，必须包含 `startTime`、`endTime`、`title`、`summary` 字段，均使用 YYYY-MM-DD HH:MM:SS 绝对时间和中文描述。
+- 所有文本字段使用中文描述，`summary` 为一句话概述，`detailedSummary` 需包含各 segment 的时间点与活动内容，并引用相对时间（例如 "00:00-05:00"）。
+- `distractions` 必须是数组，若无干扰请返回 []；如果存在干扰对象，必须包含 `startTime`、`endTime`、`title`、`summary` 字段，均使用 MM:SS 相对时间和中文描述。
 - `appSites.secondary` 必须是数组，若无元素返回 []，不要使用字符串。
 - 如果识别到主要应用/站点，请填写 `appSites.primary`。
 - 输出结果禁止使用 Markdown 或代码块标记（不要包裹 ```json）。
 - 可以参考历史卡片（如下），保持字段兼容。
 
 ## Previous Cards:
-{previous_cards_json}
+{}
 
 ## Output Format (JSON only):
 [
   {{
-    "startTime": "2025-10-04 18:00:00",
-    "endTime": "2025-10-04 18:30:00",
+    "startTime": "00:00",
+    "endTime": "15:00",
     "category": "work",
     "subcategory": "Development",
     "title": "功能开发",
@@ -691,9 +791,9 @@ Analyze these screenshots from a screen recording session and create meaningful 
   }}
 ]
 
-Return ONLY the JSON array (确保startTime/endTime等字段存在，并使用绝对时间格式 YYYY-MM-DD HH:MM:SS)。"#,
-            session_window_info = session_window_info,
-            previous_cards_json = previous_cards_json
+Return ONLY the JSON array (确保startTime/endTime等字段存在，并使用相对时间格式 MM:SS)。"#,
+            session_window_info,
+            previous_cards_json
         )
     }
 
@@ -892,6 +992,16 @@ Return ONLY the JSON object."#
             duration
         );
 
+        // 调试：打印 session_window 设置
+        if let (Some(start), Some(end)) = (&self.session_window_start, &self.session_window_end) {
+            info!("Session window 已设置: {:?} 到 {:?}", start, end);
+        } else {
+            warn!(
+                "Session window 未设置！start={:?}, end={:?}",
+                self.session_window_start, self.session_window_end
+            );
+        }
+
         // 优先从视频文件提取帧（最多30帧）
         let frames_to_use = if let Some(ref video_path) = self.session_video_path {
             info!("从视频文件提取帧: {}", video_path);
@@ -957,7 +1067,7 @@ Return ONLY the JSON object."#
         }
 
         // 添加文本提示
-        let prompt = self.build_segment_prompt();
+        let prompt = self.build_segment_prompt(duration);
         user_content.push(json!({
             "type": "text",
             "text": prompt
@@ -976,16 +1086,23 @@ Return ONLY the JSON object."#
                 info!("Claude segment_video 原始响应: {}", response);
                 // 添加更详细的调试信息
                 info!("响应长度: {} 字节", response.len());
-                info!("响应前50字符: {:?}", response.chars().take(50).collect::<String>());
+                info!(
+                    "响应前50字符: {:?}",
+                    response.chars().take(50).collect::<String>()
+                );
                 if response.len() > 50 {
-                    info!("响应后50字符: {:?}", response.chars().rev().take(50).collect::<String>());
+                    info!(
+                        "响应后50字符: {:?}",
+                        response.chars().rev().take(50).collect::<String>()
+                    );
                 }
                 // 尝试手动提取 JSON
                 if let Some(start) = response.find('[') {
                     if let Some(end) = response.rfind(']') {
                         let json_str = &response[start..=end];
                         info!("提取的 JSON 长度: {}", json_str.len());
-                        if let Err(parse_err) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        if let Err(parse_err) = serde_json::from_str::<serde_json::Value>(json_str)
+                        {
                             error!("手动提取的 JSON 解析失败: {}", parse_err);
                         }
                     }

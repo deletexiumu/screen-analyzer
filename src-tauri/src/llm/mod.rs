@@ -15,6 +15,7 @@ use crate::capture::scheduler::SessionProcessor;
 use crate::settings::SettingsManager;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -168,14 +169,28 @@ impl LLMManager {
 
     /// 切换 provider（不需要 client 参数，使用内部保存的 client）
     pub async fn switch_provider(&mut self, provider_name: &str) -> Result<()> {
-        info!("切换 LLM provider 到: {}", provider_name);
+        // 检查是否已经是目标 provider，避免重复创建实例
+        let current_config = self.config_lock.read().await;
+        let current_provider = current_config.provider.clone();
+        drop(current_config);
+
+        if current_provider == provider_name {
+            info!("Provider 已经是 {}，无需切换", provider_name);
+            return Ok(());
+        }
+
+        info!(
+            "切换 LLM provider: {} -> {}",
+            current_provider, provider_name
+        );
 
         match provider_name {
             "qwen" | "openai" => {
                 // 需要 HTTP 客户端
-                let client = self.http_client.clone().ok_or_else(|| {
-                    anyhow!("无法切换到 Qwen provider: HTTP 客户端未初始化")
-                })?;
+                let client = self
+                    .http_client
+                    .clone()
+                    .ok_or_else(|| anyhow!("无法切换到 Qwen provider: HTTP 客户端未初始化"))?;
                 self.provider = Box::new(QwenProvider::new(client));
             }
             "claude" => {
@@ -479,11 +494,17 @@ pub fn build_session_summary(
     } else {
         timeline_cards
             .first()
-            .map(|c| c.detailed_summary.clone())
+            .map(|c| {
+                // 将 detailed_summary 中的相对时间转换为绝对时间
+                convert_relative_times_in_text(&c.detailed_summary, window_start)
+            })
             .unwrap_or_else(|| {
                 segments
                     .first()
-                    .map(|s| s.description.clone())
+                    .map(|s| {
+                        // 将 description 中的相对时间转换为绝对时间
+                        convert_relative_times_in_text(&s.description, window_start)
+                    })
                     .unwrap_or_default()
             })
     };
@@ -580,6 +601,41 @@ pub(crate) fn relative_to_absolute(
         ts = start;
     }
     ts
+}
+
+/// 将文本中的相对时间（MM:SS 或 HH:MM:SS）转换为绝对时间（HH:MM）
+fn convert_relative_times_in_text(
+    text: &str,
+    window_start: chrono::DateTime<chrono::Utc>,
+) -> String {
+    use chrono::Timelike;
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    // 使用 OnceLock 缓存正则表达式对象
+    static TIME_PATTERN: OnceLock<Regex> = OnceLock::new();
+    let re = TIME_PATTERN.get_or_init(|| {
+        // 匹配时间模式：MM:SS 或 HH:MM:SS
+        // \b 确保是单词边界，避免匹配到更长的数字序列
+        Regex::new(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b").unwrap()
+    });
+
+    let result = re.replace_all(text, |caps: &regex::Captures| {
+        let time_str = caps.get(0).unwrap().as_str();
+
+        // 转换为绝对时间
+        let absolute_time = relative_to_absolute(
+            window_start,
+            window_start + chrono::Duration::days(1), // 使用一个足够大的结束时间
+            time_str,
+        );
+
+        // 转换为本地时间并格式化为 HH:MM
+        let local_time = absolute_time.with_timezone(&chrono::Local);
+        format!("{:02}:{:02}", local_time.hour(), local_time.minute())
+    });
+
+    result.to_string()
 }
 
 /// LLM处理器（实现SessionProcessor trait）
@@ -1119,4 +1175,105 @@ impl LLMProcessor {
 
         sampled
     }
+}
+
+/// 清理 request_body 中的图片 base64 数据，避免数据库膨胀
+///
+/// 该函数会遍历 JSON 结构，找到所有图片相关字段并将 base64 数据替换为占位符：
+/// - Claude 格式: content[].source.data (type="image") -> "[BASE64_REMOVED]"
+/// - Qwen 图片格式: content[].image_url.url (data: 开头) -> "[BASE64_REMOVED]"
+/// - Qwen 视频格式: content[].video[] (data: 开头的元素) -> "[BASE64_REMOVED]"
+/// - Qwen OSS URL: 保留 http/https 开头的 URL
+pub fn sanitize_request_body(value: &Value) -> String {
+    fn remove_base64(val: &Value) -> Value {
+        match val {
+            Value::Object(map) => {
+                let mut new_map = serde_json::Map::new();
+
+                for (key, v) in map {
+                    match key.as_str() {
+                        // Claude 格式：检测 source.data，始终删除 base64
+                        "source" => {
+                            if let Value::Object(source_map) = v {
+                                if source_map.contains_key("data") {
+                                    let mut sanitized_source = serde_json::Map::new();
+                                    sanitized_source.insert("type".to_string(),
+                                        source_map.get("type").cloned().unwrap_or(Value::String("base64".to_string())));
+                                    sanitized_source.insert("data".to_string(), Value::String("[BASE64_REMOVED]".to_string()));
+                                    new_map.insert(key.clone(), Value::Object(sanitized_source));
+                                    continue;
+                                }
+                            }
+                            new_map.insert(key.clone(), remove_base64(v));
+                        },
+                        // Qwen 图片格式：检测 image_url.url
+                        "image_url" => {
+                            if let Value::Object(img_map) = v {
+                                if let Some(url_value) = img_map.get("url") {
+                                    if let Some(url_str) = url_value.as_str() {
+                                        // 只删除 base64 data URL，保留 http/https URL
+                                        if url_str.starts_with("data:") {
+                                            let mut sanitized_img = serde_json::Map::new();
+                                            sanitized_img.insert("url".to_string(), Value::String("[BASE64_REMOVED]".to_string()));
+                                            new_map.insert(key.clone(), Value::Object(sanitized_img));
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                            new_map.insert(key.clone(), remove_base64(v));
+                        },
+                        // Qwen 视频格式：检测 video 数组
+                        "video" => {
+                            if let Value::Array(arr) = v {
+                                // 检查数组元素是否为 base64 data URL
+                                let mut has_base64 = false;
+                                let mut cleaned_arr = Vec::new();
+
+                                for item in arr {
+                                    if let Some(url_str) = item.as_str() {
+                                        if url_str.starts_with("data:") {
+                                            // 是 base64，标记并替换
+                                            has_base64 = true;
+                                            cleaned_arr.push(Value::String("[BASE64_REMOVED]".to_string()));
+                                        } else {
+                                            // 是普通 URL，保留
+                                            cleaned_arr.push(item.clone());
+                                        }
+                                    } else {
+                                        cleaned_arr.push(item.clone());
+                                    }
+                                }
+
+                                if has_base64 {
+                                    // 如果包含 base64，使用简化的占位符
+                                    let base64_count = cleaned_arr.iter().filter(|v| {
+                                        v.as_str().map(|s| s == "[BASE64_REMOVED]").unwrap_or(false)
+                                    }).count();
+                                    new_map.insert(key.clone(), Value::String(format!("[{} BASE64_IMAGES_REMOVED]", base64_count)));
+                                } else {
+                                    // 如果都是普通 URL，保留数组
+                                    new_map.insert(key.clone(), Value::Array(cleaned_arr));
+                                }
+                                continue;
+                            }
+                            new_map.insert(key.clone(), remove_base64(v));
+                        },
+                        // 其他字段递归处理
+                        _ => {
+                            new_map.insert(key.clone(), remove_base64(v));
+                        }
+                    }
+                }
+
+                Value::Object(new_map)
+            },
+            Value::Array(arr) => {
+                Value::Array(arr.iter().map(remove_base64).collect())
+            },
+            _ => val.clone(),
+        }
+    }
+
+    serde_json::to_string(&remove_base64(value)).unwrap_or_else(|_| "{}".to_string())
 }
