@@ -196,14 +196,31 @@ impl NotionClient {
 
     /// 构建会话的 Notion 属性
     fn build_session_properties(&self, session: &Session) -> Result<Value> {
-        // 数据库中存储的是本地时间（虽然类型标记为 DateTime<Utc>）
-        // Notion 数据库设置了时区（如 Asia/Shanghai），会自动按照数据库时区解析不带时区的时间
-        // 因此直接使用数据库中的本地时间，不要做时区转换
+        use chrono::Local;
 
-        // 直接格式化为不带时区的 ISO 8601
-        // Notion 会按照数据库设置的时区（如 Asia/Shanghai）解析这个时间
-        let start_time_str = session.start_time.format("%Y-%m-%dT%H:%M:%S").to_string();
-        let end_time_str = session.end_time.format("%Y-%m-%dT%H:%M:%S").to_string();
+        // 问题分析：
+        // 1. 数据库存储的是本地时间（虽然类型标记为 DateTime<Utc>）
+        // 2. Notion API 将不带时区的 ISO 8601 时间理解为 UTC
+        // 3. Notion 数据库时区设置（如 Asia/Shanghai）会将 UTC 时间转换显示
+        //
+        // 示例（中国时区 UTC+8）：
+        // - 数据库存储：18:00（本地时间）
+        // - 发送 "18:00" → Notion 理解为 UTC 18:00 → 显示为 Asia/Shanghai 02:00（次日）❌
+        // - 发送 "10:00" → Notion 理解为 UTC 10:00 → 显示为 Asia/Shanghai 18:00（正确）✓
+        //
+        // 解决方案：减去本地时区偏移量，得到对应的 UTC 时间
+
+        // 获取本地时区偏移量（秒）
+        let offset_seconds = Local::now().offset().local_minus_utc();
+        let offset_duration = chrono::Duration::seconds(offset_seconds as i64);
+
+        // 减去时区偏移得到 UTC 时间
+        let start_utc = session.start_time - offset_duration;
+        let end_utc = session.end_time - offset_duration;
+
+        // 格式化为不带时区的 ISO 8601
+        let start_time_str = start_utc.format("%Y-%m-%dT%H:%M:%S").to_string();
+        let end_time_str = end_utc.format("%Y-%m-%dT%H:%M:%S").to_string();
 
         let mut properties = json!({
             // 标题（必需）
