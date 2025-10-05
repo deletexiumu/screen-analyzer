@@ -196,26 +196,14 @@ impl NotionClient {
 
     /// 构建会话的 Notion 属性
     fn build_session_properties(&self, session: &Session) -> Result<Value> {
-        use chrono::{Local, TimeZone};
+        // 数据库中存储的是本地时间（虽然类型标记为 DateTime<Utc>）
+        // Notion 数据库设置了时区（如 Asia/Shanghai），会自动按照数据库时区解析不带时区的时间
+        // 因此直接使用数据库中的本地时间，不要做时区转换
 
-        // 数据库中存储的是本地时间（但类型是 DateTime<Utc>）
-        // 需要转换为真正的 UTC 时间发送给 Notion
-
-        // 1. 将数据库的"伪UTC"时间解释为本地时间
-        let start_local = Local
-            .from_local_datetime(&session.start_time.naive_local())
-            .unwrap();
-        let end_local = Local
-            .from_local_datetime(&session.end_time.naive_local())
-            .unwrap();
-
-        // 2. 转换为真正的 UTC 时间
-        let start_utc = start_local.with_timezone(&chrono::Utc);
-        let end_utc = end_local.with_timezone(&chrono::Utc);
-
-        // 3. 格式化为不带时区的 ISO 8601（Notion 会按 UTC 解析）
-        let start_time_str = start_utc.format("%Y-%m-%dT%H:%M:%S").to_string();
-        let end_time_str = end_utc.format("%Y-%m-%dT%H:%M:%S").to_string();
+        // 直接格式化为不带时区的 ISO 8601
+        // Notion 会按照数据库设置的时区（如 Asia/Shanghai）解析这个时间
+        let start_time_str = session.start_time.format("%Y-%m-%dT%H:%M:%S").to_string();
+        let end_time_str = session.end_time.format("%Y-%m-%dT%H:%M:%S").to_string();
 
         let mut properties = json!({
             // 标题（必需）
