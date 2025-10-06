@@ -32,7 +32,8 @@
       "WebFetch(domain:docs.rs)",
       "Bash(git clone:*)",
       "Read(//c/Users/sqj19/AppData/Roaming/com.cookie.screen-analyzer/**)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(git pull:*)"
     ],
     "deny": [],
     "ask": []

@@ -547,8 +547,6 @@ dependencies = [
 [[package]]
 name = "claude-agent-sdk"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b637777b596b3e377d14e7a0b59b17715e2212e7e24c03e061f4e004aea90255"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4242,6 +4240,7 @@ dependencies = [
  "claude-agent-sdk",
  "cron",
  "image",
+ "regex",
  "reqwest 0.11.27",
  "screenshots",
  "serde",
