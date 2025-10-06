@@ -15,8 +15,88 @@ use claude_agent_sdk::{
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+
+/// 读取 Claude CLI 的会话令牌（Windows 平台）
+#[cfg(target_os = "windows")]
+fn read_claude_cli_session_token() -> Option<String> {
+    use std::fs;
+
+    // 尝试多个可能的配置路径
+    let possible_paths = vec![
+        // 方式1: %USERPROFILE%\.claude\config.json
+        std::env::var("USERPROFILE")
+            .ok()
+            .map(|home| PathBuf::from(home).join(".claude").join("config.json")),
+        // 方式2: %APPDATA%\Claude\config.json
+        std::env::var("APPDATA")
+            .ok()
+            .map(|appdata| PathBuf::from(appdata).join("Claude").join("config.json")),
+        // 方式3: %LOCALAPPDATA%\Claude\config.json
+        std::env::var("LOCALAPPDATA")
+            .ok()
+            .map(|localappdata| PathBuf::from(localappdata).join("Claude").join("config.json")),
+    ];
+
+    for path_option in possible_paths {
+        if let Some(config_path) = path_option {
+            if !config_path.exists() {
+                debug!("Claude CLI 配置文件不存在: {:?}", config_path);
+                continue;
+            }
+
+            info!("找到 Claude CLI 配置文件: {:?}", config_path);
+
+            if let Ok(content) = fs::read_to_string(&config_path) {
+                info!("成功读取 Claude CLI 配置文件");
+
+                if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+                    // 打印配置文件的所有字段名（不打印值）
+                    if let Some(obj) = config.as_object() {
+                        let field_names: Vec<&String> = obj.keys().collect();
+                        info!("配置文件包含字段: {:?}", field_names);
+                    }
+
+                    // 尝试多个可能的字段名
+                    let session_key = config
+                        .get("sessionKey")
+                        .or_else(|| config.get("session_key"))
+                        .or_else(|| config.get("token"))
+                        .or_else(|| config.get("api_key"))
+                        .or_else(|| config.get("anthropic_api_key"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    if let Some(ref key) = session_key {
+                        info!(
+                            "成功从 Claude CLI 配置读取会话令牌 (长度: {} 字符)",
+                            key.len()
+                        );
+                        return Some(key.clone());
+                    } else {
+                        warn!("Claude CLI 配置文件中未找到会话令牌字段");
+                    }
+                } else {
+                    warn!("无法解析 Claude CLI 配置文件为 JSON");
+                }
+            } else {
+                warn!("无法读取 Claude CLI 配置文件: {:?}", config_path);
+            }
+        }
+    }
+
+    warn!("未能从任何位置读取到 Claude CLI 会话令牌");
+    None
+}
+
+/// 读取 Claude CLI 的会话令牌（非 Windows 平台）
+#[cfg(not(target_os = "windows"))]
+fn read_claude_cli_session_token() -> Option<String> {
+    // 非 Windows 平台，SDK 应该能正常工作
+    None
+}
 
 /// Claude Provider - 使用 Messages API 进行视觉分析
 pub struct ClaudeProvider {
@@ -153,8 +233,10 @@ impl ClaudeProvider {
 
             #[cfg(target_os = "windows")]
             {
-                use std::os::windows::process::CommandExt;
+                // Windows 下隐藏控制台窗口
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
+                #[allow(unused_imports)]
+                use std::os::windows::process::CommandExt;
                 command.creation_flags(CREATE_NO_WINDOW);
             }
 
@@ -293,6 +375,10 @@ impl ClaudeProvider {
     }
 
     /// 调用 Claude Agent SDK（流式模式，支持视觉分析）
+    ///
+    /// 已知限制：在 Windows Release 版本中，SubprocessTransport 会创建临时的
+    /// 黑色控制台窗口。这是 claude-agent-sdk 库的限制。
+    /// 解决方案：使用 API Key 配置可以避免此问题。
     async fn call_claude_api(
         &self,
         system_prompt: String,
@@ -355,8 +441,20 @@ impl ClaudeProvider {
             .build();
         options.model = Some(self.model.clone());
         options.include_partial_messages = true;
+
         if let Some(api_key) = api_key {
             options.env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
+        } else {
+            // Windows 下尝试读取 Claude CLI 会话令牌
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(session_token) = read_claude_cli_session_token() {
+                    info!("使用 Claude CLI 会话令牌");
+                    options.env.insert("ANTHROPIC_API_KEY".to_string(), session_token);
+                } else {
+                    warn!("Windows 下未找到 Claude CLI 会话令牌，将依赖 SDK 默认行为");
+                }
+            }
         }
 
         let mut transport = SubprocessTransport::new(PromptInput::Stream, options, None)
@@ -513,9 +611,14 @@ impl ClaudeProvider {
     /// 3. Markdown 代码块（无语言标记）: ` ```\n[{...}]\n``` `
     /// 4. 包含其他文本的响应，提取 JSON 部分
     fn extract_json(response: &str) -> Result<serde_json::Value> {
+        let response = response.trim();
+
         // 尝试直接解析
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(response) {
-            return Ok(value);
+        match serde_json::from_str::<serde_json::Value>(response) {
+            Ok(value) => return Ok(value),
+            Err(e) => {
+                debug!("直接解析 JSON 失败: {}", e);
+            }
         }
 
         // 尝试提取 markdown 代码块中的 JSON
@@ -536,8 +639,11 @@ impl ClaudeProvider {
                 let json_str = response[content_start..content_start + end_pos].trim();
 
                 // 尝试解析提取的内容
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    return Ok(value);
+                match serde_json::from_str::<serde_json::Value>(json_str) {
+                    Ok(value) => return Ok(value),
+                    Err(e) => {
+                        debug!("从代码块提取 JSON 失败: {}", e);
+                    }
                 }
             }
         }
@@ -546,8 +652,15 @@ impl ClaudeProvider {
         if let Some(start) = response.find('[').or_else(|| response.find('{')) {
             if let Some(end) = response.rfind(']').or_else(|| response.rfind('}')) {
                 let json_str = &response[start..=end];
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    return Ok(value);
+                match serde_json::from_str::<serde_json::Value>(json_str) {
+                    Ok(value) => return Ok(value),
+                    Err(e) => {
+                        warn!("从响应提取 JSON 失败: {}", e);
+                        debug!("提取的 JSON 字符串前100字符: {}",
+                            &json_str.chars().take(100).collect::<String>());
+                        debug!("JSON 字符串长度: {}, 字节长度: {}",
+                            json_str.chars().count(), json_str.len());
+                    }
                 }
             }
         }
@@ -930,7 +1043,31 @@ Return ONLY the JSON object."#
         let json_value = match Self::extract_json(&response) {
             Ok(value) => value,
             Err(err) => {
+                error!("Claude segment_video JSON 提取失败: {}", err);
+                // 将完整响应写入文件以便调试
+                if let Err(e) = std::fs::write(
+                    std::env::temp_dir().join("claude_segment_video_response.txt"),
+                    &response
+                ) {
+                    warn!("无法写入调试文件: {}", e);
+                }
+                info!("Claude segment_video 原始响应已保存到: {:?}",
+                    std::env::temp_dir().join("claude_segment_video_response.txt"));
                 info!("Claude segment_video 原始响应: {}", response);
+                info!("响应长度: {} 字符, {} 字节", response.chars().count(), response.len());
+
+                let char_count = response.chars().count();
+                info!("响应前50字符: {:?}", response.chars().take(50).collect::<String>());
+                if char_count > 50 {
+                    let last_50: String = response.chars().skip(char_count - 50).collect();
+                    info!("响应后50字符: {:?}", last_50);
+                }
+
+                // 尝试直接解析以获取具体错误
+                if let Err(parse_err) = serde_json::from_str::<serde_json::Value>(&response) {
+                    error!("直接 JSON 解析错误详情: {}", parse_err);
+                }
+
                 return Err(err);
             }
         };

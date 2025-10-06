@@ -137,7 +137,10 @@ impl LLMManager {
         drop(current_config);
 
         match provider_name.as_str() {
-            "qwen" => {
+            "qwen" | "openai" => {
+                // "openai" 是 Qwen 的别名（因为使用 OpenAI 兼容接口）
+                info!("配置 Qwen provider (当前provider名称: {})", provider_name);
+
                 // 如果有视频路径，设置到provider
                 if let Some(ref video_path) = config.video_path {
                     if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
@@ -146,13 +149,15 @@ impl LLMManager {
                 }
 
                 // 更新provider配置
-                self.provider.configure(serde_json::to_value(&config)?)?;
+                let config_json = serde_json::to_value(&config)?;
+                info!("应用 Qwen 配置: {:?}", config_json);
+                self.provider.configure(config_json)?;
 
                 // 更新配置锁
                 let mut current_config = self.config_lock.write().await;
                 current_config.qwen = config;
 
-                info!("Qwen 配置已更新");
+                info!("Qwen 配置已更新成功");
             }
             "claude" => {
                 // Claude 目前无需额外配置

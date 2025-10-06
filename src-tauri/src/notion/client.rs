@@ -41,11 +41,14 @@ fn get_system_timezone() -> String {
     #[cfg(target_os = "windows")]
     {
         // Windows 时区映射较复杂，默认使用 Asia/Shanghai
-        return "Asia/Shanghai".to_string();
+        "Asia/Shanghai".to_string()
     }
 
-    // 默认返回 Asia/Shanghai
-    "Asia/Shanghai".to_string()
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 默认返回 Asia/Shanghai
+        "Asia/Shanghai".to_string()
+    }
 }
 
 /// 英文关键词到中文的映射
