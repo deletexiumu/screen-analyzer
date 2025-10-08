@@ -282,9 +282,11 @@ impl ScreenCapture {
             resized.color(),
         )?;
 
+        let file_path_str = file_path.to_string_lossy().to_string().replace('\\', "/");
+
         let frame = ScreenFrame {
             timestamp,
-            file_path: file_path.to_string_lossy().to_string(),
+            file_path: file_path_str,
             screen_id: 0,
         };
 

@@ -1081,7 +1081,7 @@ async fn configure_llm_provider(
                 api_key,
                 model,
                 base_url: String::new(), // Claude 不需要 base_url
-                use_video_mode: true,     // Claude 支持视频模式
+                use_video_mode: true,    // Claude 支持视频模式
             }
         }
         _ => {
@@ -1603,9 +1603,11 @@ fn read_claude_cli_session_token() -> Option<String> {
             .ok()
             .map(|appdata| PathBuf::from(appdata).join("Claude").join("config.json")),
         // 方式3: %LOCALAPPDATA%\Claude\config.json
-        std::env::var("LOCALAPPDATA")
-            .ok()
-            .map(|localappdata| PathBuf::from(localappdata).join("Claude").join("config.json")),
+        std::env::var("LOCALAPPDATA").ok().map(|localappdata| {
+            PathBuf::from(localappdata)
+                .join("Claude")
+                .join("config.json")
+        }),
     ];
 
     for path_option in possible_paths {
@@ -1698,7 +1700,9 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
     // 如果提供了 API key，设置环境变量
     if let Some(key) = api_key {
         if !key.is_empty() {
-            options.env.insert("ANTHROPIC_API_KEY".to_string(), key.to_string());
+            options
+                .env
+                .insert("ANTHROPIC_API_KEY".to_string(), key.to_string());
         }
     } else {
         // Windows 下尝试读取 Claude CLI 会话令牌
@@ -1706,7 +1710,9 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
         {
             if let Some(session_token) = read_claude_cli_session_token() {
                 info!("使用 Claude CLI 会话令牌");
-                options.env.insert("ANTHROPIC_API_KEY".to_string(), session_token);
+                options
+                    .env
+                    .insert("ANTHROPIC_API_KEY".to_string(), session_token);
             } else {
                 warn!("Windows 下未找到 Claude CLI 会话令牌，将依赖 SDK 默认行为");
             }
@@ -1751,36 +1757,34 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
 
     while let Some(message_result) = message_rx.recv().await {
         match message_result {
-            Ok(raw_value) => {
-                match parse_message(raw_value) {
-                    Ok(agent_message) => match agent_message {
-                        AgentMessage::Assistant { message, .. } => {
-                            for block in message.content {
-                                if let AgentContentBlock::Text { text } = block {
-                                    response_text.push_str(&text);
-                                }
+            Ok(raw_value) => match parse_message(raw_value) {
+                Ok(agent_message) => match agent_message {
+                    AgentMessage::Assistant { message, .. } => {
+                        for block in message.content {
+                            if let AgentContentBlock::Text { text } = block {
+                                response_text.push_str(&text);
                             }
-                            break;
                         }
-                        AgentMessage::StreamEvent { event, .. } => {
-                            if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                                if event_type == "content_block_delta" {
-                                    if let Some(delta) = event.get("delta") {
-                                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
-                                            response_text.push_str(text);
-                                        }
+                        break;
+                    }
+                    AgentMessage::StreamEvent { event, .. } => {
+                        if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                            if event_type == "content_block_delta" {
+                                if let Some(delta) = event.get("delta") {
+                                    if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                        response_text.push_str(text);
                                     }
                                 }
                             }
                         }
-                        AgentMessage::Result { .. } => break,
-                        _ => {}
-                    },
-                    Err(e) => {
-                        return Err(format!("解析消息失败: {}", e));
                     }
+                    AgentMessage::Result { .. } => break,
+                    _ => {}
+                },
+                Err(e) => {
+                    return Err(format!("解析消息失败: {}", e));
                 }
-            }
+            },
             Err(e) => {
                 return Err(format!("读取消息失败: {}", e));
             }
@@ -2788,7 +2792,10 @@ async fn analyze_video_once(
     }
 
     // 设置视频路径
-    if let Err(e) = llm_handle.set_video_path(Some(video_path_str.clone())).await {
+    if let Err(e) = llm_handle
+        .set_video_path(Some(video_path_str.clone()))
+        .await
+    {
         return Err(e.to_string());
     }
 

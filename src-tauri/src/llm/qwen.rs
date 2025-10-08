@@ -1232,7 +1232,9 @@ impl LLMProvider for QwenProvider {
 
         info!(
             "✓ Qwen提供商配置完成: model={}, video_mode={}, api_key_configured={}",
-            self.model, self.use_video_mode, self.api_key.is_some()
+            self.model,
+            self.use_video_mode,
+            self.api_key.is_some()
         );
         Ok(())
     }

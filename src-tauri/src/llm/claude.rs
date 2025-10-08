@@ -35,9 +35,11 @@ fn read_claude_cli_session_token() -> Option<String> {
             .ok()
             .map(|appdata| PathBuf::from(appdata).join("Claude").join("config.json")),
         // 方式3: %LOCALAPPDATA%\Claude\config.json
-        std::env::var("LOCALAPPDATA")
-            .ok()
-            .map(|localappdata| PathBuf::from(localappdata).join("Claude").join("config.json")),
+        std::env::var("LOCALAPPDATA").ok().map(|localappdata| {
+            PathBuf::from(localappdata)
+                .join("Claude")
+                .join("config.json")
+        }),
     ];
 
     for path_option in possible_paths {
@@ -493,12 +495,13 @@ impl ClaudeProvider {
         // 确保每次调用都是新会话，不继续之前的对话
         options.continue_conversation = false;
         options.resume = None;
-        let stream_timeout_secs = std::env::var("CLAUDE_AGENT_STREAM_TIMEOUT_SECS")
+        // 注意: stream_timeout_secs 字段已从新版 claude-agent-sdk 中移除
+        // 超时现在由底层传输层管理
+        let _stream_timeout_secs = std::env::var("CLAUDE_AGENT_STREAM_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(180);
-        options.stream_timeout_secs = Some(stream_timeout_secs);
-        info!("Claude Agent 流读取超时: {} 秒", stream_timeout_secs);
+        info!("Claude Agent 流读取超时配置已移至传输层管理");
         if let Some(api_key) = api_key {
             options.env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
         } else {
@@ -507,7 +510,9 @@ impl ClaudeProvider {
             {
                 if let Some(session_token) = read_claude_cli_session_token() {
                     info!("使用 Claude CLI 会话令牌");
-                    options.env.insert("ANTHROPIC_API_KEY".to_string(), session_token);
+                    options
+                        .env
+                        .insert("ANTHROPIC_API_KEY".to_string(), session_token);
                 } else {
                     warn!("Windows 下未找到 Claude CLI 会话令牌，将依赖 SDK 默认行为");
                 }
@@ -818,10 +823,7 @@ Analyze these screenshots from a screen recording session and create meaningful 
 - **CRITICAL**: Return ONLY the JSON array, NO markdown formatting, NO code blocks, NO ```json markers
 - Output must be valid JSON that can be parsed directly
 - Do NOT wrap the JSON in any markdown syntax"#,
-            session_window_info,
-            duration,
-            duration,
-            duration
+            session_window_info, duration, duration, duration
         )
     }
 
@@ -895,8 +897,7 @@ Analyze these screenshots from a screen recording session and create meaningful 
 ]
 
 Return ONLY the JSON array (确保startTime/endTime等字段存在，并使用相对时间格式 MM:SS)。"#,
-            session_window_info,
-            previous_cards_json
+            session_window_info, previous_cards_json
         )
     }
 
@@ -1190,12 +1191,14 @@ Return ONLY the JSON object."#
                 // 将完整响应写入文件以便调试
                 if let Err(e) = std::fs::write(
                     std::env::temp_dir().join("claude_segment_video_response.txt"),
-                    &response
+                    &response,
                 ) {
                     warn!("无法写入调试文件: {}", e);
                 }
-                info!("Claude segment_video 原始响应已保存到: {:?}",
-                    std::env::temp_dir().join("claude_segment_video_response.txt"));
+                info!(
+                    "Claude segment_video 原始响应已保存到: {:?}",
+                    std::env::temp_dir().join("claude_segment_video_response.txt")
+                );
                 info!("Claude segment_video 原始响应: {}", response);
                 // 添加更详细的调试信息
                 info!("响应长度: {} 字节", response.len());

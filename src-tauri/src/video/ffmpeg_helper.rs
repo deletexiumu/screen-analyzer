@@ -6,26 +6,83 @@ use tracing::{debug, info, warn};
 
 /// 获取FFmpeg可执行文件的路径
 pub fn get_ffmpeg_path() -> Result<PathBuf> {
-    // macOS 常见的 ffmpeg 安装路径
-    let common_paths = vec![
-        "/opt/homebrew/bin/ffmpeg", // Apple Silicon Homebrew
-        "/usr/local/bin/ffmpeg",    // Intel Homebrew
-        "/opt/local/bin/ffmpeg",    // MacPorts
-        "/usr/bin/ffmpeg",          // 系统自带（少见）
-    ];
+    let mut common_paths: Vec<PathBuf> = Vec::new();
 
-    // 先尝试常见路径
-    for path_str in &common_paths {
-        let path = PathBuf::from(path_str);
+    #[cfg(target_os = "macos")]
+    {
+        common_paths.extend(
+            [
+                "/opt/homebrew/bin/ffmpeg",
+                "/usr/local/bin/ffmpeg",
+                "/opt/local/bin/ffmpeg",
+                "/usr/bin/ffmpeg",
+            ]
+            .into_iter()
+            .map(PathBuf::from),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        common_paths.extend(
+            [
+                "/usr/bin/ffmpeg",
+                "/usr/local/bin/ffmpeg",
+                "/snap/bin/ffmpeg",
+            ]
+            .into_iter()
+            .map(PathBuf::from),
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let direct_candidates = [
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files\FFmpeg\ffmpeg.exe",
+            r"C:\Program Files\FFmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files (x86)\FFmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+        ];
+
+        common_paths.extend(direct_candidates.into_iter().map(PathBuf::from));
+
+        if let Ok(program_files) = std::env::var("PROGRAMFILES") {
+            let base = PathBuf::from(&program_files);
+            common_paths.push(base.join("ffmpeg.exe"));
+            common_paths.push(base.join("ffmpeg").join("ffmpeg.exe"));
+            common_paths.push(base.join("ffmpeg").join("bin").join("ffmpeg.exe"));
+            common_paths.push(base.join("FFmpeg").join("bin").join("ffmpeg.exe"));
+        }
+
+        if let Ok(program_files_x86) = std::env::var("PROGRAMFILES(X86)") {
+            let base = PathBuf::from(&program_files_x86);
+            common_paths.push(base.join("ffmpeg").join("bin").join("ffmpeg.exe"));
+            common_paths.push(base.join("FFmpeg").join("bin").join("ffmpeg.exe"));
+        }
+
+        if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+            let base = PathBuf::from(&local_app);
+            common_paths.push(base.join("Programs").join("ffmpeg").join("ffmpeg.exe"));
+            common_paths.push(
+                base.join("Programs")
+                    .join("ffmpeg")
+                    .join("bin")
+                    .join("ffmpeg.exe"),
+            );
+        }
+    }
+
+    for path in &common_paths {
         if path.exists() {
-            // 验证可执行
-            let mut command = std::process::Command::new(&path);
+            let mut command = std::process::Command::new(path);
             command.arg("-version");
 
-            // Windows下隐藏控制台窗口
             #[cfg(target_os = "windows")]
             {
-                #[allow(unused_imports)]
                 use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
                 command.creation_flags(CREATE_NO_WINDOW);
@@ -34,17 +91,15 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
             if let Ok(output) = command.output() {
                 if output.status.success() {
                     info!("使用系统FFmpeg: {:?}", path);
-                    return Ok(path);
+                    return Ok(path.clone());
                 }
             }
         }
     }
 
-    // 尝试 PATH 环境变量中的 ffmpeg
     let mut command = std::process::Command::new("ffmpeg");
     command.arg("-version");
 
-    // Windows下隐藏控制台窗口
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -59,7 +114,6 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
         }
     }
 
-    // 最后尝试内置的FFmpeg（仅作为备用）
     if let Ok(bundled_path) = get_bundled_ffmpeg_path() {
         if bundled_path.exists() {
             info!("使用内置FFmpeg: {:?}", bundled_path);
@@ -67,9 +121,8 @@ pub fn get_ffmpeg_path() -> Result<PathBuf> {
         }
     }
 
-    // 都没找到，返回友好的错误提示
     Err(anyhow!(
-        "未找到FFmpeg。请通过 Homebrew 安装: brew install ffmpeg"
+        "未找到FFmpeg。请将 ffmpeg.exe 添加到 PATH，或放入 src-tauri/resources/ffmpeg/windows/ 目录，或按官方指引安装 FFmpeg。"
     ))
 }
 

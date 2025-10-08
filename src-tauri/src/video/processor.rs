@@ -318,13 +318,15 @@ impl VideoProcessor {
 
         let mut content = String::new();
         for frame in &valid_frames {
-            content.push_str(&format!("file '{}'\n", frame));
+            let normalized = frame.replace('\\', "/");
+            content.push_str(&format!("file '{}'\n", normalized));
             content.push_str("duration 1\n"); // 每张图片展示1秒
         }
 
         // 最后一帧需要特殊处理
-        if !valid_frames.is_empty() {
-            content.push_str(&format!("file '{}'\n", valid_frames.last().unwrap()));
+        if let Some(last) = valid_frames.last() {
+            let normalized = last.replace('\\', "/");
+            content.push_str(&format!("file '{}\n", normalized));
         }
 
         tokio::fs::write(&list_path, content).await?;
