@@ -4,7 +4,7 @@ use super::plugin::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use chrono::{Local, TimeZone, Timelike};
+use chrono::Timelike;
 use reqwest::{multipart, Client};
 use serde::Deserialize;
 use serde_json::json;
@@ -518,7 +518,8 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
                 "X-DashScope-OssResourceResolve": "enable"
             })
             .to_string(),
-            request_body: request_body.to_string(),
+            // 使用 sanitize_request_body 清理图片 base64 数据
+            request_body: crate::llm::sanitize_request_body(&request_body),
             response_headers: None,
             response_body: None,
             status_code: None,
@@ -690,7 +691,8 @@ Create long, meaningful cards that represent cohesive sessions of activity, idea
                 "X-DashScope-OssResourceResolve": "enable"
             })
             .to_string(),
-            request_body: request_body.to_string(),
+            // 使用 sanitize_request_body 清理图片 base64 数据
+            request_body: crate::llm::sanitize_request_body(&request_body),
             response_headers: None,
             response_body: None,
             status_code: None,
@@ -1290,10 +1292,9 @@ impl LLMProvider for QwenProvider {
 
         let mut sessions_text = String::new();
         for session in sessions_to_process {
-            let start_local = Local.from_utc_datetime(&session.start_time.naive_utc());
-            let end_local = Local.from_utc_datetime(&session.end_time.naive_utc());
-            let start_time = start_local.format("%H:%M");
-            let end_time = end_local.format("%H:%M");
+            // 数据库存储的已经是本地时间，直接格式化即可，不需要时区转换
+            let start_time = session.start_time.format("%H:%M");
+            let end_time = session.end_time.format("%H:%M");
             let duration = (session.end_time - session.start_time).num_minutes();
 
             // 如果 summary 过长，进行截断（安全截断，考虑 UTF-8 字符边界）

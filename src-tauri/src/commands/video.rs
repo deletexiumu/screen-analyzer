@@ -168,14 +168,28 @@ pub async fn generate_video(
         })?;
 
     // 清理frame文件夹中的图片（视频已生成，不再需要原始图片）
+    let mut deleted_count = 0;
+    let mut failed_count = 0;
+
     for frame in all_frames {
-        if let Err(e) = tokio::fs::remove_file(&frame.file_path).await {
-            debug!("清理frame文件失败 {}: {}", frame.file_path, e);
+        // 先检查文件是否存在
+        if !std::path::Path::new(&frame.file_path).exists() {
+            debug!("frame文件不存在（可能已被删除）: {}", frame.file_path);
+            continue;
+        }
+
+        match tokio::fs::remove_file(&frame.file_path).await {
+            Ok(_) => deleted_count += 1,
+            Err(e) => {
+                failed_count += 1;
+                error!("清理frame文件失败 {}: {}", frame.file_path, e);
+            }
         }
     }
+
     info!(
-        "视频生成成功并已更新数据库，清理了 {} 个frame文件",
-        all_frames.len()
+        "视频生成成功并已更新数据库，清理frame文件: 成功 {}, 失败 {}, 总计 {}",
+        deleted_count, failed_count, all_frames.len()
     );
 
     Ok(result.file_path)

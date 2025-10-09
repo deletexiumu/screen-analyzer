@@ -1311,13 +1311,11 @@ Return ONLY the JSON object."#
 
         let mut sessions_text = String::new();
         for session in sessions.iter().take(50) {
-            use chrono::TimeZone;
-            let start_local = chrono::Local.from_utc_datetime(&session.start_time.naive_utc());
-            let end_local = chrono::Local.from_utc_datetime(&session.end_time.naive_utc());
+            // 数据库存储的已经是本地时间，直接格式化即可，不需要时区转换
             sessions_text.push_str(&format!(
                 "\n- {} - {}: {}\n  {}",
-                start_local.format("%H:%M"),
-                end_local.format("%H:%M"),
+                session.start_time.format("%H:%M"),
+                session.end_time.format("%H:%M"),
                 session.title,
                 session.summary
             ));

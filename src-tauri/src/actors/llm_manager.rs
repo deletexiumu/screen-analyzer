@@ -29,21 +29,29 @@ pub enum LLMCommand {
     GetConfig { reply: oneshot::Sender<LLMConfig> },
 
     /// 设置视频路径
-    SetVideoPath { video_path: Option<String> },
+    SetVideoPath {
+        video_path: Option<String>,
+        reply: oneshot::Sender<()>,
+    },
 
     /// 设置视频速率
-    SetVideoSpeed { speed_multiplier: f32 },
+    SetVideoSpeed {
+        speed_multiplier: f32,
+        reply: oneshot::Sender<()>,
+    },
 
     /// 设置会话时间范围
     SetSessionWindow {
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
+        reply: oneshot::Sender<()>,
     },
 
     /// 设置provider的数据库连接
     SetProviderDatabase {
         db: Arc<Database>,
         session_id: Option<i64>,
+        reply: oneshot::Sender<()>,
     },
 
     /// 分析视频并生成时间线（两阶段处理）
@@ -126,20 +134,31 @@ impl LLMManagerActor {
                     let _ = reply.send(config);
                 }
 
-                LLMCommand::SetVideoPath { video_path } => {
+                LLMCommand::SetVideoPath { video_path, reply } => {
                     self.manager.set_video_path(video_path);
+                    let _ = reply.send(()); // 发送确认
                 }
 
-                LLMCommand::SetVideoSpeed { speed_multiplier } => {
+                LLMCommand::SetVideoSpeed {
+                    speed_multiplier,
+                    reply,
+                } => {
                     self.manager.set_video_speed(speed_multiplier);
+                    let _ = reply.send(()); // 发送确认
                 }
 
-                LLMCommand::SetSessionWindow { start, end } => {
+                LLMCommand::SetSessionWindow { start, end, reply } => {
                     self.manager.set_session_window(start, end);
+                    let _ = reply.send(()); // 发送确认
                 }
 
-                LLMCommand::SetProviderDatabase { db, session_id } => {
+                LLMCommand::SetProviderDatabase {
+                    db,
+                    session_id,
+                    reply,
+                } => {
                     self.manager.set_provider_database(db, session_id);
+                    let _ = reply.send(()); // 发送确认
                 }
 
                 LLMCommand::SegmentVideoAndGenerateTimeline {
@@ -241,19 +260,26 @@ impl LLMHandle {
 
     /// 设置视频路径
     pub async fn set_video_path(&self, video_path: Option<String>) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
         self.sender
-            .send(LLMCommand::SetVideoPath { video_path })
+            .send(LLMCommand::SetVideoPath { video_path, reply })
             .await
             .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?;
         Ok(())
     }
 
     /// 设置视频速率
     pub async fn set_video_speed(&self, speed_multiplier: f32) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
         self.sender
-            .send(LLMCommand::SetVideoSpeed { speed_multiplier })
+            .send(LLMCommand::SetVideoSpeed {
+                speed_multiplier,
+                reply,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?;
         Ok(())
     }
 
@@ -263,10 +289,12 @@ impl LLMHandle {
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
     ) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
         self.sender
-            .send(LLMCommand::SetSessionWindow { start, end })
+            .send(LLMCommand::SetSessionWindow { start, end, reply })
             .await
             .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?;
         Ok(())
     }
 
@@ -276,10 +304,16 @@ impl LLMHandle {
         db: Arc<Database>,
         session_id: Option<i64>,
     ) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
         self.sender
-            .send(LLMCommand::SetProviderDatabase { db, session_id })
+            .send(LLMCommand::SetProviderDatabase {
+                db,
+                session_id,
+                reply,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?;
         Ok(())
     }
 
