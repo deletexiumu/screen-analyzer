@@ -138,7 +138,10 @@ impl LLMManager {
         drop(current_config);
 
         match provider_name.as_str() {
-            "qwen" => {
+            "qwen" | "openai" => {
+                // "openai" 是 Qwen 的别名（因为使用 OpenAI 兼容接口）
+                info!("配置 Qwen provider (当前provider名称: {})", provider_name);
+
                 // 如果有视频路径，设置到provider
                 if let Some(ref video_path) = config.video_path {
                     if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
@@ -147,13 +150,15 @@ impl LLMManager {
                 }
 
                 // 更新provider配置
-                self.provider.configure(serde_json::to_value(&config)?)?;
+                let config_json = serde_json::to_value(&config)?;
+                info!("应用 Qwen 配置: {:?}", config_json);
+                self.provider.configure(config_json)?;
 
                 // 更新配置锁
                 let mut current_config = self.config_lock.write().await;
                 current_config.qwen = config;
 
-                info!("Qwen 配置已更新");
+                info!("Qwen 配置已更新成功");
             }
             "claude" => {
                 // Claude 目前无需额外配置
@@ -1197,15 +1202,23 @@ pub fn sanitize_request_body(value: &Value) -> String {
                             if let Value::Object(source_map) = v {
                                 if source_map.contains_key("data") {
                                     let mut sanitized_source = serde_json::Map::new();
-                                    sanitized_source.insert("type".to_string(),
-                                        source_map.get("type").cloned().unwrap_or(Value::String("base64".to_string())));
-                                    sanitized_source.insert("data".to_string(), Value::String("[BASE64_REMOVED]".to_string()));
+                                    sanitized_source.insert(
+                                        "type".to_string(),
+                                        source_map
+                                            .get("type")
+                                            .cloned()
+                                            .unwrap_or(Value::String("base64".to_string())),
+                                    );
+                                    sanitized_source.insert(
+                                        "data".to_string(),
+                                        Value::String("[BASE64_REMOVED]".to_string()),
+                                    );
                                     new_map.insert(key.clone(), Value::Object(sanitized_source));
                                     continue;
                                 }
                             }
                             new_map.insert(key.clone(), remove_base64(v));
-                        },
+                        }
                         // Qwen 图片格式：检测 image_url.url
                         "image_url" => {
                             if let Value::Object(img_map) = v {
@@ -1214,15 +1227,19 @@ pub fn sanitize_request_body(value: &Value) -> String {
                                         // 只删除 base64 data URL，保留 http/https URL
                                         if url_str.starts_with("data:") {
                                             let mut sanitized_img = serde_json::Map::new();
-                                            sanitized_img.insert("url".to_string(), Value::String("[BASE64_REMOVED]".to_string()));
-                                            new_map.insert(key.clone(), Value::Object(sanitized_img));
+                                            sanitized_img.insert(
+                                                "url".to_string(),
+                                                Value::String("[BASE64_REMOVED]".to_string()),
+                                            );
+                                            new_map
+                                                .insert(key.clone(), Value::Object(sanitized_img));
                                             continue;
                                         }
                                     }
                                 }
                             }
                             new_map.insert(key.clone(), remove_base64(v));
-                        },
+                        }
                         // Qwen 视频格式：检测 video 数组
                         "video" => {
                             if let Value::Array(arr) = v {
@@ -1235,7 +1252,9 @@ pub fn sanitize_request_body(value: &Value) -> String {
                                         if url_str.starts_with("data:") {
                                             // 是 base64，标记并替换
                                             has_base64 = true;
-                                            cleaned_arr.push(Value::String("[BASE64_REMOVED]".to_string()));
+                                            cleaned_arr.push(Value::String(
+                                                "[BASE64_REMOVED]".to_string(),
+                                            ));
                                         } else {
                                             // 是普通 URL，保留
                                             cleaned_arr.push(item.clone());
@@ -1247,10 +1266,21 @@ pub fn sanitize_request_body(value: &Value) -> String {
 
                                 if has_base64 {
                                     // 如果包含 base64，使用简化的占位符
-                                    let base64_count = cleaned_arr.iter().filter(|v| {
-                                        v.as_str().map(|s| s == "[BASE64_REMOVED]").unwrap_or(false)
-                                    }).count();
-                                    new_map.insert(key.clone(), Value::String(format!("[{} BASE64_IMAGES_REMOVED]", base64_count)));
+                                    let base64_count = cleaned_arr
+                                        .iter()
+                                        .filter(|v| {
+                                            v.as_str()
+                                                .map(|s| s == "[BASE64_REMOVED]")
+                                                .unwrap_or(false)
+                                        })
+                                        .count();
+                                    new_map.insert(
+                                        key.clone(),
+                                        Value::String(format!(
+                                            "[{} BASE64_IMAGES_REMOVED]",
+                                            base64_count
+                                        )),
+                                    );
                                 } else {
                                     // 如果都是普通 URL，保留数组
                                     new_map.insert(key.clone(), Value::Array(cleaned_arr));
@@ -1258,7 +1288,7 @@ pub fn sanitize_request_body(value: &Value) -> String {
                                 continue;
                             }
                             new_map.insert(key.clone(), remove_base64(v));
-                        },
+                        }
                         // 其他字段递归处理
                         _ => {
                             new_map.insert(key.clone(), remove_base64(v));
@@ -1267,10 +1297,8 @@ pub fn sanitize_request_body(value: &Value) -> String {
                 }
 
                 Value::Object(new_map)
-            },
-            Value::Array(arr) => {
-                Value::Array(arr.iter().map(remove_base64).collect())
-            },
+            }
+            Value::Array(arr) => Value::Array(arr.iter().map(remove_base64).collect()),
             _ => val.clone(),
         }
     }

@@ -176,9 +176,11 @@ impl StorageCleaner {
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.is_file() {
-                // 检查文件的修改时间
-                if let Ok(metadata) = tokio::fs::metadata(&path).await {
+
+            // 使用异步方法获取文件元数据，而不是同步的 is_file()
+            if let Ok(metadata) = tokio::fs::metadata(&path).await {
+                // 检查是否是文件（而不是目录）
+                if metadata.is_file() {
                     if let Ok(modified) = metadata.modified() {
                         let age = std::time::SystemTime::now()
                             .duration_since(modified)

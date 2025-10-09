@@ -1023,12 +1023,19 @@ async fn configure_llm_provider(
     let llm_provider_config = match provider.as_str() {
         "openai" => {
             // Qwen (通过 OpenAI 兼容接口)
+            let api_key = config
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            // 验证 API key 不能为空
+            if api_key.trim().is_empty() {
+                return Err("通义千问 API Key 不能为空".to_string());
+            }
+
             let qwen_config = llm::QwenConfig {
-                api_key: config
-                    .get("api_key")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                api_key,
                 model: config
                     .get("model")
                     .and_then(|v| v.as_str())
@@ -1074,7 +1081,7 @@ async fn configure_llm_provider(
                 api_key,
                 model,
                 base_url: String::new(), // Claude 不需要 base_url
-                use_video_mode: true,     // Claude 支持视频模式
+                use_video_mode: true,    // Claude 支持视频模式
             }
         }
         _ => {
@@ -1580,8 +1587,92 @@ async fn test_openai_text_api(config: serde_json::Value) -> Result<String, Strin
     Ok(content.to_string())
 }
 
-/// 测试Anthropic文本API
+/// 读取 Claude CLI 的会话令牌（Windows 平台）
+#[cfg(target_os = "windows")]
+fn read_claude_cli_session_token() -> Option<String> {
+    use std::fs;
+
+    // 尝试多个可能的配置路径
+    let possible_paths = vec![
+        // 方式1: %USERPROFILE%\.claude\config.json
+        std::env::var("USERPROFILE")
+            .ok()
+            .map(|home| PathBuf::from(home).join(".claude").join("config.json")),
+        // 方式2: %APPDATA%\Claude\config.json
+        std::env::var("APPDATA")
+            .ok()
+            .map(|appdata| PathBuf::from(appdata).join("Claude").join("config.json")),
+        // 方式3: %LOCALAPPDATA%\Claude\config.json
+        std::env::var("LOCALAPPDATA").ok().map(|localappdata| {
+            PathBuf::from(localappdata)
+                .join("Claude")
+                .join("config.json")
+        }),
+    ];
+
+    for path_option in possible_paths {
+        if let Some(config_path) = path_option {
+            if !config_path.exists() {
+                debug!("Claude CLI 配置文件不存在: {:?}", config_path);
+                continue;
+            }
+
+            info!("找到 Claude CLI 配置文件: {:?}", config_path);
+
+            if let Ok(content) = fs::read_to_string(&config_path) {
+                info!("成功读取 Claude CLI 配置文件");
+
+                if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+                    // 打印配置文件的所有字段名（不打印值）
+                    if let Some(obj) = config.as_object() {
+                        let field_names: Vec<&String> = obj.keys().collect();
+                        info!("配置文件包含字段: {:?}", field_names);
+                    }
+
+                    // 尝试多个可能的字段名
+                    let session_key = config
+                        .get("sessionKey")
+                        .or_else(|| config.get("session_key"))
+                        .or_else(|| config.get("token"))
+                        .or_else(|| config.get("api_key"))
+                        .or_else(|| config.get("anthropic_api_key"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    if let Some(ref key) = session_key {
+                        info!(
+                            "成功从 Claude CLI 配置读取会话令牌 (长度: {} 字符)",
+                            key.len()
+                        );
+                        return Some(key.clone());
+                    } else {
+                        warn!("Claude CLI 配置文件中未找到会话令牌字段");
+                    }
+                } else {
+                    warn!("无法解析 Claude CLI 配置文件为 JSON");
+                }
+            } else {
+                warn!("无法读取 Claude CLI 配置文件: {:?}", config_path);
+            }
+        }
+    }
+
+    warn!("未能从任何位置读取到 Claude CLI 会话令牌");
+    None
+}
+
+/// 读取 Claude CLI 的会话令牌（非 Windows 平台）
+#[cfg(not(target_os = "windows"))]
+fn read_claude_cli_session_token() -> Option<String> {
+    // 非 Windows 平台，SDK 应该能正常工作
+    None
+}
+
 /// 测试 Claude Agent SDK API
+///
+/// 已知限制：在 Windows Release 版本中，claude-agent-sdk 的 SubprocessTransport
+/// 会创建一个临时的黑色控制台窗口。这是外部库的限制，暂时无法避免。
+/// 如果需要避免此问题，请使用 API Key 而不是 CLI 会话。
 async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String> {
     use claude_agent_sdk::{
         message::parse_message,
@@ -1609,7 +1700,22 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
     // 如果提供了 API key，设置环境变量
     if let Some(key) = api_key {
         if !key.is_empty() {
-            options.env.insert("ANTHROPIC_API_KEY".to_string(), key.to_string());
+            options
+                .env
+                .insert("ANTHROPIC_API_KEY".to_string(), key.to_string());
+        }
+    } else {
+        // Windows 下尝试读取 Claude CLI 会话令牌
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(session_token) = read_claude_cli_session_token() {
+                info!("使用 Claude CLI 会话令牌");
+                options
+                    .env
+                    .insert("ANTHROPIC_API_KEY".to_string(), session_token);
+            } else {
+                warn!("Windows 下未找到 Claude CLI 会话令牌，将依赖 SDK 默认行为");
+            }
         }
     }
 
@@ -1651,36 +1757,34 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
 
     while let Some(message_result) = message_rx.recv().await {
         match message_result {
-            Ok(raw_value) => {
-                match parse_message(raw_value) {
-                    Ok(agent_message) => match agent_message {
-                        AgentMessage::Assistant { message, .. } => {
-                            for block in message.content {
-                                if let AgentContentBlock::Text { text } = block {
-                                    response_text.push_str(&text);
-                                }
+            Ok(raw_value) => match parse_message(raw_value) {
+                Ok(agent_message) => match agent_message {
+                    AgentMessage::Assistant { message, .. } => {
+                        for block in message.content {
+                            if let AgentContentBlock::Text { text } = block {
+                                response_text.push_str(&text);
                             }
-                            break;
                         }
-                        AgentMessage::StreamEvent { event, .. } => {
-                            if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                                if event_type == "content_block_delta" {
-                                    if let Some(delta) = event.get("delta") {
-                                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
-                                            response_text.push_str(text);
-                                        }
+                        break;
+                    }
+                    AgentMessage::StreamEvent { event, .. } => {
+                        if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
+                            if event_type == "content_block_delta" {
+                                if let Some(delta) = event.get("delta") {
+                                    if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                        response_text.push_str(text);
                                     }
                                 }
                             }
                         }
-                        AgentMessage::Result { .. } => break,
-                        _ => {}
-                    },
-                    Err(e) => {
-                        return Err(format!("解析消息失败: {}", e));
                     }
+                    AgentMessage::Result { .. } => break,
+                    _ => {}
+                },
+                Err(e) => {
+                    return Err(format!("解析消息失败: {}", e));
                 }
-            }
+            },
             Err(e) => {
                 return Err(format!("读取消息失败: {}", e));
             }
@@ -2091,6 +2195,22 @@ pub fn run() {
                 }
             }
 
+            // Windows 下读取 Claude CLI 会话令牌并设置全局环境变量
+            #[cfg(target_os = "windows")]
+            {
+                if std::env::var("ANTHROPIC_API_KEY").is_err() {
+                    // 如果环境变量未设置，尝试从 Claude CLI 配置读取
+                    if let Some(session_token) = read_claude_cli_session_token() {
+                        std::env::set_var("ANTHROPIC_API_KEY", &session_token);
+                        info!("已从 Claude CLI 配置设置全局 ANTHROPIC_API_KEY 环境变量");
+                    } else {
+                        info!("未找到 Claude CLI 会话令牌，将在需要时再次尝试读取");
+                    }
+                } else {
+                    info!("ANTHROPIC_API_KEY 环境变量已存在");
+                }
+            }
+
             // 设置日志广播器的 app handle
             log_broadcaster.set_app_handle(app.handle().clone());
 
@@ -2336,24 +2456,28 @@ pub fn run() {
                         if let Some(llm_config) = llm_config_to_load {
                             match provider {
                                 "openai" => {
-                                    // Qwen 配置
-                                    let qwen_config = llm::QwenConfig {
-                                        api_key: llm_config.api_key,
-                                        model: llm_config.model,
-                                        base_url: llm_config.base_url,
-                                        use_video_mode: llm_config.use_video_mode,
-                                        video_path: None,
-                                    };
-
-                                    if let Err(e) = state_clone
-                                        .analysis_domain
-                                        .get_llm_handle()
-                                        .configure(qwen_config)
-                                        .await
-                                    {
-                                        error!("加载 Qwen 配置失败: {}", e);
+                                    // Qwen 配置 - 验证 API key 不为空
+                                    if llm_config.api_key.trim().is_empty() {
+                                        warn!("Qwen API key 为空，跳过配置加载。请在设置中配置 API key");
                                     } else {
-                                        info!("已从配置文件加载 Qwen 设置");
+                                        let qwen_config = llm::QwenConfig {
+                                            api_key: llm_config.api_key,
+                                            model: llm_config.model,
+                                            base_url: llm_config.base_url,
+                                            use_video_mode: llm_config.use_video_mode,
+                                            video_path: None,
+                                        };
+
+                                        if let Err(e) = state_clone
+                                            .analysis_domain
+                                            .get_llm_handle()
+                                            .configure(qwen_config)
+                                            .await
+                                        {
+                                            error!("加载 Qwen 配置失败: {}", e);
+                                        } else {
+                                            info!("已从配置文件加载 Qwen 设置");
+                                        }
                                     }
                                 }
                                 "claude" => {
@@ -2668,7 +2792,10 @@ async fn analyze_video_once(
     }
 
     // 设置视频路径
-    if let Err(e) = llm_handle.set_video_path(Some(video_path_str.clone())).await {
+    if let Err(e) = llm_handle
+        .set_video_path(Some(video_path_str.clone()))
+        .await
+    {
         return Err(e.to_string());
     }
 

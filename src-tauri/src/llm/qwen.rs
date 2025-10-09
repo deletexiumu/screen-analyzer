@@ -955,6 +955,8 @@ impl LLMProvider for QwenProvider {
     /// 分析屏幕截图帧
     async fn analyze_frames(&self, frames: Vec<String>) -> Result<SessionSummary> {
         if !self.is_configured() {
+            error!("Qwen API key未配置！api_key = {:?}", self.api_key);
+            error!("请检查配置文件和配置加载流程");
             return Err(anyhow::anyhow!("Qwen API key未配置，请先配置 API key"));
         }
 
@@ -1199,25 +1201,40 @@ impl LLMProvider for QwenProvider {
     }
 
     fn configure(&mut self, config: serde_json::Value) -> Result<()> {
+        info!("Qwen configure 被调用，配置内容: {:?}", config);
+
+        // 配置 API key（只接受非空字符串）
         if let Some(api_key) = config.get("api_key").and_then(|v| v.as_str()) {
-            self.api_key = Some(api_key.to_string());
+            if !api_key.trim().is_empty() {
+                self.api_key = Some(api_key.to_string());
+                info!("✓ Qwen API key 已设置 (长度: {} 字符)", api_key.len());
+            } else {
+                warn!("✗ 收到空的 API key，忽略");
+            }
+        } else {
+            warn!("✗ 配置中没有 api_key 字段");
         }
 
         if let Some(model) = config.get("model").and_then(|v| v.as_str()) {
             self.model = model.to_string();
+            info!("✓ Qwen model 已设置: {}", model);
         }
 
         if let Some(use_video) = config.get("use_video_mode").and_then(|v| v.as_bool()) {
             self.use_video_mode = use_video;
+            info!("✓ Qwen video_mode 已设置: {}", use_video);
         }
 
         if let Some(video_path) = config.get("video_path").and_then(|v| v.as_str()) {
             self.session_video_path = Some(video_path.to_string());
+            info!("✓ Qwen video_path 已设置: {}", video_path);
         }
 
         info!(
-            "Qwen提供商已配置: model={}, video_mode={}",
-            self.model, self.use_video_mode
+            "✓ Qwen提供商配置完成: model={}, video_mode={}, api_key_configured={}",
+            self.model,
+            self.use_video_mode,
+            self.api_key.is_some()
         );
         Ok(())
     }

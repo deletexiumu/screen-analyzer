@@ -963,10 +963,17 @@ const saveSettings = async () => {
     })
 
     // 配置LLM提供商
-    if (settings.llm_provider === 'openai' && llmConfig.openai.api_key) {
+    if (settings.llm_provider === 'openai') {
+      // Qwen 配置（必须有 API key）
+      if (!llmConfig.openai.api_key || llmConfig.openai.api_key.trim() === '') {
+        ElMessage.warning('请填写通义千问的 API Key')
+        return
+      }
+      console.log('配置 Qwen:', llmConfig.openai)
       await store.configureLLMProvider('openai', llmConfig.openai)
     } else if (settings.llm_provider === 'claude') {
       // Claude 允许不填写 API key，会使用 CLI 凭据
+      console.log('配置 Claude:', llmConfig.claude)
       await store.configureLLMProvider('claude', llmConfig.claude)
     }
 

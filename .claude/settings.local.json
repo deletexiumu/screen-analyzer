@@ -25,7 +25,15 @@
       "Bash(cargo test:*)",
       "Bash(cargo fix:*)",
       "Bash(taskkill:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(git restore:*)",
+      "Bash(cargo search:*)",
+      "Bash(cargo info:*)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(git clone:*)",
+      "Read(//c/Users/sqj19/AppData/Roaming/com.cookie.screen-analyzer/**)",
+      "Bash(git config:*)",
+      "Bash(git pull:*)"
     ],
     "deny": [],
     "ask": []
