@@ -703,11 +703,12 @@ impl ClaudeProvider {
     /// 3. Markdown 代码块（无语言标记）: ` ```\n[{...}]\n``` `
     /// 4. 包含其他文本的响应，提取 JSON 部分
     fn extract_json(response: &str) -> Result<serde_json::Value> {
-        // 先 trim 去除前后空白字符
+        // 先 trim 去除前后空白字符，并替换中文引号为英文引号
         let response = response.trim();
+        let normalized = response.replace('"', "\"").replace('"', "\"");
 
         // 尝试直接解析
-        match serde_json::from_str::<serde_json::Value>(response) {
+        match serde_json::from_str::<serde_json::Value>(&normalized) {
             Ok(value) => return Ok(value),
             Err(e) => {
                 debug!("直接解析 JSON 失败: {}", e);
@@ -730,9 +731,11 @@ impl ClaudeProvider {
             // 查找结束标记
             if let Some(end_pos) = response[content_start..].find("```") {
                 let json_str = response[content_start..content_start + end_pos].trim();
+                // 替换中文引号为英文引号
+                let normalized = json_str.replace('"', "\"").replace('"', "\"");
 
                 // 尝试解析提取的内容
-                match serde_json::from_str::<serde_json::Value>(json_str) {
+                match serde_json::from_str::<serde_json::Value>(&normalized) {
                     Ok(value) => return Ok(value),
                     Err(e) => {
                         debug!("从代码块提取 JSON 失败: {}", e);
@@ -753,13 +756,16 @@ impl ClaudeProvider {
                     json_str.chars().take(100).collect::<String>()
                 );
 
-                match serde_json::from_str::<serde_json::Value>(json_str) {
+                // 替换中文引号为英文引号
+                let normalized = json_str.replace('"', "\"").replace('"', "\"");
+
+                match serde_json::from_str::<serde_json::Value>(&normalized) {
                     Ok(value) => return Ok(value),
                     Err(parse_err) => {
                         tracing::warn!("JSON 解析失败: {}, 尝试清理后重试", parse_err);
 
                         // 尝试清理字符串（移除不可见字符）
-                        let cleaned = json_str
+                        let cleaned = normalized
                             .chars()
                             .filter(|c| !c.is_control() || *c == '\n' || *c == '\r' || *c == '\t')
                             .collect::<String>();
@@ -822,7 +828,8 @@ Analyze these screenshots from a screen recording session and create meaningful 
 - Write descriptions in Chinese
 - **CRITICAL**: Return ONLY the JSON array, NO markdown formatting, NO code blocks, NO ```json markers
 - Output must be valid JSON that can be parsed directly
-- Do NOT wrap the JSON in any markdown syntax"#,
+- Do NOT wrap the JSON in any markdown syntax
+- **IMPORTANT**: Use ONLY ASCII quotation marks (") in JSON, NEVER use Chinese quotation marks ("" or '')"#,
             session_window_info, duration, duration, duration
         )
     }
@@ -872,6 +879,7 @@ Analyze these screenshots from a screen recording session and create meaningful 
 - `appSites.secondary` 必须是数组，若无元素返回 []，不要使用字符串。
 - 如果识别到主要应用/站点，请填写 `appSites.primary`。
 - 输出结果禁止使用 Markdown 或代码块标记（不要包裹 ```json）。
+- **重要**: JSON 中必须使用 ASCII 引号 ("), 绝不要使用中文引号 ("" 或 '')。
 - 可以参考历史卡片（如下），保持字段兼容。
 
 ## Previous Cards:
