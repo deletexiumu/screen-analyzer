@@ -719,7 +719,9 @@ async fn generate_video(
 
     info!(
         "视频生成成功并已更新数据库，清理frame文件: 成功 {}, 失败 {}, 总计 {}",
-        deleted_count, failed_count, all_frames.len()
+        deleted_count,
+        failed_count,
+        all_frames.len()
     );
 
     Ok(result.file_path)
