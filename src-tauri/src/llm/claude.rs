@@ -13,9 +13,10 @@ use claude_agent_sdk::{
     types::{ClaudeAgentOptions, ContentBlock as AgentContentBlock, Message as AgentMessage},
     Transport,
 };
+use llm_json::{loads, repair_json, RepairOptions};
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
@@ -703,83 +704,293 @@ impl ClaudeProvider {
     /// 3. Markdown 代码块（无语言标记）: ` ```\n[{...}]\n``` `
     /// 4. 包含其他文本的响应，提取 JSON 部分
     fn extract_json(response: &str) -> Result<serde_json::Value> {
-        // 先 trim 去除前后空白字符，并替换中文引号为英文引号
-        let response = response.trim();
-        let normalized = response.replace('"', "\"").replace('"', "\"");
+        let trimmed = response.trim();
+        let normalized = Self::normalize_quotes(trimmed);
 
-        // 尝试直接解析
-        match serde_json::from_str::<serde_json::Value>(&normalized) {
-            Ok(value) => return Ok(value),
-            Err(e) => {
-                debug!("直接解析 JSON 失败: {}", e);
-            }
-        }
+        debug!("extract_json: 输入长度 {} 字节", normalized.len());
 
-        // 尝试提取 markdown 代码块中的 JSON
-        // 这个方法能处理 ```json 和 ``` 两种格式
-        if let Some(start_marker) = response.find("```") {
-            // 找到代码块开始标记
-            let after_marker = &response[start_marker + 3..];
-
-            // 跳过语言标识（如 "json"）到下一行
-            let content_start = if let Some(newline_pos) = after_marker.find('\n') {
-                start_marker + 3 + newline_pos + 1
+        // 1. 首先尝试提取代码块（最优先，避免误提取）
+        if let Some(block) = Self::extract_first_code_block(normalized.as_ref()) {
+            debug!("extract_json: 提取到代码块，长度 {} 字节", block.len());
+            debug!("extract_json: 代码块前50字符: {:?}", block.chars().take(50).collect::<String>());
+            if let Some(value) = Self::parse_json_candidate(&block) {
+                debug!("extract_json: 成功从代码块解析 JSON");
+                return Ok(value);
             } else {
-                start_marker + 3
-            };
+                warn!("extract_json: 代码块解析失败，继续尝试其他方法");
+            }
+        } else {
+            debug!("extract_json: 未找到代码块");
+        }
 
-            // 查找结束标记
-            if let Some(end_pos) = response[content_start..].find("```") {
-                let json_str = response[content_start..content_start + end_pos].trim();
-                // 替换中文引号为英文引号
-                let normalized = json_str.replace('"', "\"").replace('"', "\"");
+        // 2. 尝试直接解析整个内容
+        if let Some(value) = Self::parse_json_candidate(normalized.as_ref()) {
+            debug!("extract_json: 成功直接解析 JSON");
+            return Ok(value);
+        }
 
-                // 尝试解析提取的内容
-                match serde_json::from_str::<serde_json::Value>(&normalized) {
-                    Ok(value) => return Ok(value),
-                    Err(e) => {
-                        debug!("从代码块提取 JSON 失败: {}", e);
-                    }
-                }
+        // 3. 最后尝试提取括号内容（可能不准确）
+        if let Some(candidate) = Self::extract_outer_json(normalized.as_ref()) {
+            debug!("extract_json: 尝试从括号内容解析 JSON，长度 {}", candidate.len());
+            debug!("extract_json: 括号内容前50字符: {:?}", candidate.chars().take(50).collect::<String>());
+            if let Some(value) = Self::parse_json_candidate(&candidate) {
+                debug!("extract_json: 成功从括号内容解析 JSON");
+                return Ok(value);
             }
         }
 
-        // 尝试提取第一个 [ 或 { 到最后一个 ] 或 }
-        if let Some(start) = response.find('[').or_else(|| response.find('{')) {
-            if let Some(end) = response.rfind(']').or_else(|| response.rfind('}')) {
-                let json_str = &response[start..=end];
-
-                // 记录提取的内容用于调试
-                tracing::debug!("提取的 JSON 字符串长度: {}", json_str.len());
-                tracing::debug!(
-                    "提取的 JSON 前100字符: {:?}",
-                    json_str.chars().take(100).collect::<String>()
-                );
-
-                // 替换中文引号为英文引号
-                let normalized = json_str.replace('"', "\"").replace('"', "\"");
-
-                match serde_json::from_str::<serde_json::Value>(&normalized) {
-                    Ok(value) => return Ok(value),
-                    Err(parse_err) => {
-                        tracing::warn!("JSON 解析失败: {}, 尝试清理后重试", parse_err);
-
-                        // 尝试清理字符串（移除不可见字符）
-                        let cleaned = normalized
-                            .chars()
-                            .filter(|c| !c.is_control() || *c == '\n' || *c == '\r' || *c == '\t')
-                            .collect::<String>();
-
-                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&cleaned) {
-                            tracing::info!("清理后的 JSON 解析成功");
-                            return Ok(value);
-                        }
-                    }
-                }
-            }
-        }
-
+        error!("extract_json: 所有方法都失败了");
         Err(anyhow::anyhow!("无法从响应中提取有效的 JSON"))
+    }
+
+    fn parse_json_candidate(input: &str) -> Option<serde_json::Value> {
+        let trimmed_input = input.trim();
+        if trimmed_input.is_empty() {
+            return None;
+        }
+
+        let stripped = Self::strip_language_marker(trimmed_input);
+        let mut candidates: Vec<&str> = Vec::new();
+        if stripped != trimmed_input {
+            candidates.push(stripped);
+        }
+        candidates.push(trimmed_input);
+
+        for (idx, candidate) in candidates.iter().enumerate() {
+            let candidate = candidate.trim();
+            if candidate.is_empty() {
+                continue;
+            }
+
+            debug!("parse_json_candidate: 尝试候选 {} (长度 {})", idx, candidate.len());
+
+            // 1. 直接解析（最优先，最可靠）
+            match serde_json::from_str::<serde_json::Value>(candidate) {
+                Ok(value) => {
+                    debug!("parse_json_candidate: 直接解析成功, 类型: {}",
+                        match &value {
+                            serde_json::Value::Array(_) => "Array",
+                            serde_json::Value::Object(_) => "Object",
+                            _ => "Other"
+                        }
+                    );
+                    return Some(value);
+                }
+                Err(err) => debug!("parse_json_candidate: 直接解析失败: {}", err),
+            }
+
+            // 2. 清理控制字符后重试标准解析
+            let cleaned: String = candidate
+                .chars()
+                .filter(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+                .collect();
+
+            if cleaned != candidate {
+                debug!("parse_json_candidate: 清理控制字符后重试");
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+                    debug!("parse_json_candidate: 清理后直接解析成功");
+                    return Some(value);
+                }
+            }
+
+            // 3. 最后才使用 llm_json 修复（因为可能产生错误结果）
+            // 注意：只有在前面的方法都失败时才使用，因为 llm_json 可能会错误地修改 JSON 结构
+            let mut options = RepairOptions::default();
+            options.ensure_ascii = false; // 需要保留中文字符
+
+            match loads(candidate, &options) {
+                Ok(value) => {
+                    // 验证结果是否合理（避免 llm_json 错误地将数组变成对象）
+                    let is_reasonable = match &value {
+                        serde_json::Value::Array(_) => {
+                            // 如果原始字符串以 [ 开头，结果应该是数组
+                            candidate.trim_start().starts_with('[')
+                        }
+                        serde_json::Value::Object(_) => {
+                            // 如果原始字符串以 { 开头，结果应该是对象
+                            candidate.trim_start().starts_with('{')
+                        }
+                        _ => true
+                    };
+
+                    if is_reasonable {
+                        debug!("parse_json_candidate: llm_json::loads 修复成功, 类型: {}",
+                            match &value {
+                                serde_json::Value::Array(_) => "Array",
+                                serde_json::Value::Object(_) => "Object",
+                                _ => "Other"
+                            }
+                        );
+                        return Some(value);
+                    } else {
+                        warn!("parse_json_candidate: llm_json::loads 修复结果不合理，跳过");
+                    }
+                }
+                Err(err) => debug!("parse_json_candidate: llm_json::loads 修复失败: {}", err),
+            }
+
+            // 4. 尝试 repair_json
+            match repair_json(candidate, &options) {
+                Ok(repaired) => {
+                    debug!("parse_json_candidate: repair_json 生成的内容前100字符: {:?}",
+                        repaired.chars().take(100).collect::<String>());
+                    match serde_json::from_str::<serde_json::Value>(&repaired) {
+                        Ok(value) => {
+                            // 同样验证合理性
+                            let is_reasonable = match &value {
+                                serde_json::Value::Array(_) => candidate.trim_start().starts_with('['),
+                                serde_json::Value::Object(_) => candidate.trim_start().starts_with('{'),
+                                _ => true
+                            };
+
+                            if is_reasonable {
+                                debug!("parse_json_candidate: repair_json 修复成功, 类型: {}",
+                                    match &value {
+                                        serde_json::Value::Array(_) => "Array",
+                                        serde_json::Value::Object(_) => "Object",
+                                        _ => "Other"
+                                    }
+                                );
+                                return Some(value);
+                            } else {
+                                warn!("parse_json_candidate: repair_json 修复结果不合理，跳过");
+                            }
+                        }
+                        Err(err) => debug!("parse_json_candidate: 修复后的 JSON 解析失败: {}", err),
+                    }
+                }
+                Err(err) => debug!("parse_json_candidate: llm_json::repair_json 失败: {}", err),
+            }
+        }
+
+        warn!("parse_json_candidate: 所有候选都解析失败");
+        None
+    }
+
+    fn extract_first_code_block(input: &str) -> Option<String> {
+        let mut search_start = 0;
+        while let Some(start_marker) = input[search_start..].find("```") {
+            let start_marker = search_start + start_marker;
+            let after_marker = &input[start_marker + 3..];
+
+            debug!("extract_first_code_block: 找到代码块开始标记，位置 {}", start_marker);
+            debug!("extract_first_code_block: 标记后内容前30字符: {:?}",
+                after_marker.chars().take(30).collect::<String>());
+
+            let content_start_offset = after_marker.find('\n').map(|pos| pos + 1).unwrap_or(0);
+            let content_start = start_marker + 3 + content_start_offset;
+
+            debug!("extract_first_code_block: 内容开始位置: {}, 偏移: {}", content_start, content_start_offset);
+
+            if let Some(end_relative) = input[content_start..].find("```") {
+                let content_end = content_start + end_relative;
+                let block = input[content_start..content_end].trim();
+
+                debug!("extract_first_code_block: 提取的代码块长度: {}", block.len());
+                debug!("extract_first_code_block: 代码块前50字符: {:?}",
+                    block.chars().take(50).collect::<String>());
+
+                let stripped = Self::strip_language_marker(block);
+
+                if stripped != block {
+                    debug!("extract_first_code_block: 移除语言标记后长度: {}", stripped.len());
+                }
+
+                return Some(stripped.to_string());
+            } else {
+                debug!("extract_first_code_block: 未找到代码块结束标记");
+            }
+
+            search_start = start_marker + 3;
+        }
+
+        debug!("extract_first_code_block: 未找到任何代码块");
+        None
+    }
+
+    fn extract_outer_json(input: &str) -> Option<String> {
+        let array_start = input.find('[');
+        let object_start = input.find('{');
+        let (start_idx, is_array) = match (array_start, object_start) {
+            (Some(a), Some(o)) => {
+                if a < o {
+                    (a, true)
+                } else {
+                    (o, false)
+                }
+            }
+            (Some(a), None) => (a, true),
+            (None, Some(o)) => (o, false),
+            _ => return None,
+        };
+
+        let end_idx = if is_array {
+            input.rfind(']')?
+        } else {
+            input.rfind('}')?
+        };
+
+        if end_idx <= start_idx {
+            return None;
+        }
+
+        Some(input[start_idx..=end_idx].trim().to_string())
+    }
+
+    fn strip_language_marker(input: &str) -> &str {
+        let trimmed = input.trim_start();
+        let mut marker_end: Option<usize> = None;
+
+        for (idx, ch) in trimmed.char_indices() {
+            if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
+                marker_end = Some(idx + ch.len_utf8());
+                continue;
+            }
+
+            if let Some(_end) = marker_end {
+                let rest = trimmed[idx..].trim_start();
+                if rest.starts_with('[') || rest.starts_with('{') {
+                    return rest;
+                }
+            }
+
+            return trimmed;
+        }
+
+        trimmed
+    }
+
+    fn normalize_quotes(input: &str) -> Cow<'_, str> {
+        let mut needs_normalization = false;
+        for ch in input.chars() {
+            if matches!(
+                ch,
+                '“' | '”' | '„' | '‟' | '«' | '»' | '「' | '」' | '『' | '』'
+            ) || matches!(ch, '‘' | '’' | '‹' | '›')
+            {
+                needs_normalization = true;
+                break;
+            }
+        }
+
+        if !needs_normalization {
+            return Cow::Borrowed(input);
+        }
+
+        let mut normalized = String::with_capacity(input.len());
+        for ch in input.chars() {
+            match ch {
+                '“' | '”' | '„' | '‟' | '«' | '»' | '「' | '」' | '『' | '』' => {
+                    normalized.push('"');
+                }
+                '‘' | '’' | '‹' | '›' => {
+                    normalized.push('\'');
+                }
+                _ => normalized.push(ch),
+            }
+        }
+
+        Cow::Owned(normalized)
     }
 
     /// 构建视频分段提示词
@@ -826,10 +1037,12 @@ Analyze these screenshots from a screen recording session and create meaningful 
 - Use relative timestamp format: MM:SS (分钟:秒)
 - Group related activities together
 - Write descriptions in Chinese
+- When referencing interface text or titles, prefer 《》 or escape double quotes as \"; never leave raw " inside JSON strings
 - **CRITICAL**: Return ONLY the JSON array, NO markdown formatting, NO code blocks, NO ```json markers
 - Output must be valid JSON that can be parsed directly
 - Do NOT wrap the JSON in any markdown syntax
-- **IMPORTANT**: Use ONLY ASCII quotation marks (") in JSON, NEVER use Chinese quotation marks ("" or '')"#,
+- **IMPORTANT**: Use ONLY ASCII quotation marks (") in JSON, NEVER use Chinese quotation marks (e.g. \u201C\u201D or \u2018\u2019)
+- Double-check that every JSON string is properly escaped before responding"#,
             session_window_info, duration, duration, duration
         )
     }
@@ -1423,5 +1636,117 @@ Return ONLY the JSON object."#
                 "webp".to_string(),
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_json_from_markdown_array() {
+        // 测试从 markdown 代码块中提取 JSON 数组
+        let response = r#"```json
+[
+  {
+    "startTime": "00:00",
+    "endTime": "15:00",
+    "category": "communication",
+    "subcategory": "社交与开发",
+    "title": "微信群聊与项目代码查看",
+    "summary": "在微信群聊交流的同时,查看和浏览多个开发项目的代码与文档",
+    "detailedSummary": "00:00-03:30 在ChatGPT和微信之间切换",
+    "distractions": [],
+    "appSites": {
+      "primary": "wechat.com",
+      "secondary": ["chatgpt.com", "notion.so"]
+    },
+    "isUpdated": false
+  }
+]
+```"#;
+
+        let result = ClaudeProvider::extract_json(response);
+        assert!(result.is_ok(), "JSON 解析应该成功");
+
+        let json_value = result.unwrap();
+        assert!(json_value.is_array(), "解析结果应该是数组，实际是: {:?}", json_value);
+
+        let array = json_value.as_array().unwrap();
+        assert_eq!(array.len(), 1, "数组应该包含1个元素");
+        assert_eq!(array[0]["category"].as_str().unwrap(), "communication");
+    }
+
+    #[test]
+    fn test_normalize_quotes() {
+        // 测试引号规范化 - 使用中文引号 「」 和 ""
+        let input = "测试\u{300c}中文引号\u{300d}和\u{201c}英文引号\u{201d}";
+        let normalized = ClaudeProvider::normalize_quotes(input);
+        println!("原始: {}", input);
+        println!("规范化: {}", normalized);
+
+        // 打印所有引号字符的 Unicode 码点
+        for (i, ch) in normalized.chars().enumerate() {
+            if ch == '"' || ch == '\u{201c}' || ch == '\u{201d}' || ch == '\u{300c}' || ch == '\u{300d}' {
+                println!("位置 {}: 字符 '{}' (U+{:04X})", i, ch, ch as u32);
+            }
+        }
+
+        // 应该不包含中文引号
+        assert!(!normalized.contains('\u{300c}'), "不应包含 LEFT CORNER BRACKET");
+        assert!(!normalized.contains('\u{300d}'), "不应包含 RIGHT CORNER BRACKET");
+        assert!(!normalized.contains('\u{201c}'), "不应包含 LEFT DOUBLE QUOTATION MARK");
+        assert!(!normalized.contains('\u{201d}'), "不应包含 RIGHT DOUBLE QUOTATION MARK");
+
+        // 应该包含标准 ASCII 双引号 (U+0022)
+        assert!(normalized.contains('"'), "应该包含标准双引号");
+
+        // 验证结果
+        println!("最终规范化结果: {}", normalized);
+        assert_eq!(normalized, "测试\"中文引号\"和\"英文引号\"");
+    }
+
+    #[test]
+    fn test_extract_json_with_potential_llm_json_issue() {
+        // 测试 llm_json 可能错误地将数组变成对象的情况
+        // 使用有效的 JSON，但测试合理性验证逻辑
+        let response = r#"```json
+[
+  {
+    "startTime": "00:00",
+    "endTime": "15:00",
+    "category": "work",
+    "title": "开发任务",
+    "summary": "进行代码开发"
+  }
+]
+```"#;
+
+        let result = ClaudeProvider::extract_json(response);
+        assert!(result.is_ok(), "有效的 JSON 数组应该能被解析: {:?}", result.err());
+
+        let json_value = result.unwrap();
+        assert!(json_value.is_array(), "解析结果应该是数组，而不是对象");
+
+        let array = json_value.as_array().unwrap();
+        assert_eq!(array.len(), 1);
+        assert_eq!(array[0]["category"].as_str().unwrap(), "work");
+    }
+
+    #[test]
+    fn test_extract_json_without_code_block() {
+        // 测试没有代码块标记的纯 JSON
+        let response = r#"[
+  {
+    "startTime": "00:00",
+    "endTime": "15:00"
+  }
+]"#;
+
+        let result = ClaudeProvider::extract_json(response);
+        assert!(result.is_ok(), "纯 JSON 应该能被解析");
+
+        let json_value = result.unwrap();
+        assert!(json_value.is_array(), "解析结果应该是数组");
     }
 }

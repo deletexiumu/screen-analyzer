@@ -80,8 +80,8 @@ pub struct VideoSegmentRecord {
     pub id: Option<i64>,
     pub session_id: i64,
     pub llm_call_id: Option<i64>, // 关联的LLM调用记录
-    pub start_timestamp: String,  // MM:SS格式
-    pub end_timestamp: String,    // MM:SS格式
+    pub start_timestamp: String,  // RFC3339 格式（如 2025-10-09T12:54:00+08:00，包含时区）
+    pub end_timestamp: String,    // RFC3339 格式（如 2025-10-09T12:54:00+08:00，包含时区）
     pub description: String,
     #[serde(serialize_with = "serialize_datetime_as_local")]
     pub created_at: DateTime<Utc>,
@@ -93,8 +93,8 @@ pub struct TimelineCardRecord {
     pub id: Option<i64>,
     pub session_id: i64,
     pub llm_call_id: Option<i64>, // 关联的LLM调用记录
-    pub start_time: String,
-    pub end_time: String,
+    pub start_time: String,       // RFC3339 格式（如 2025-10-09T12:54:00+08:00，包含时区）
+    pub end_time: String,         // RFC3339 格式（如 2025-10-09T12:54:00+08:00，包含时区）
     pub category: String,
     pub subcategory: String,
     pub title: String,

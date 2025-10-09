@@ -635,9 +635,9 @@ fn convert_relative_times_in_text(
             time_str,
         );
 
-        // 转换为本地时间并格式化为 HH:MM
-        let local_time = absolute_time.with_timezone(&chrono::Local);
-        format!("{:02}:{:02}", local_time.hour(), local_time.minute())
+        // 注意：window_start 虽然类型是 DateTime<Utc>，但实际值是本地时间
+        // absolute_time 也是同样的情况，直接格式化即可，不要进行时区转换
+        format!("{:02}:{:02}", absolute_time.hour(), absolute_time.minute())
     });
 
     result.to_string()
@@ -1033,15 +1033,32 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
             let start_abs =
                 relative_to_absolute(window.start, window.end, &segment.start_timestamp);
             let end_abs = relative_to_absolute(window.start, window.end, &segment.end_timestamp);
-            segment.start_timestamp = start_abs.to_rfc3339();
-            segment.end_timestamp = end_abs.to_rfc3339();
+            // 注意：window.start/end 虽然类型是 DateTime<Utc>，但通过 local_now() 存储的是本地时间值
+            // 将其重新解释为本地时间并生成带时区标记的 RFC3339 格式（如 2025-10-09T12:54:00+08:00）
+            use chrono::{Local, TimeZone};
+            segment.start_timestamp = Local
+                .from_local_datetime(&start_abs.naive_local())
+                .unwrap()
+                .to_rfc3339();
+            segment.end_timestamp = Local
+                .from_local_datetime(&end_abs.naive_local())
+                .unwrap()
+                .to_rfc3339();
         }
 
         for card in &mut timeline_cards {
             let start_abs = relative_to_absolute(window.start, window.end, &card.start_time);
             let end_abs = relative_to_absolute(window.start, window.end, &card.end_time);
-            card.start_time = start_abs.to_rfc3339();
-            card.end_time = end_abs.to_rfc3339();
+            // 同样，将其重新解释为本地时间并生成带时区标记的 RFC3339 格式
+            use chrono::{Local, TimeZone};
+            card.start_time = Local
+                .from_local_datetime(&start_abs.naive_local())
+                .unwrap()
+                .to_rfc3339();
+            card.end_time = Local
+                .from_local_datetime(&end_abs.naive_local())
+                .unwrap()
+                .to_rfc3339();
 
             if let Some(distractions) = card.distractions.as_mut() {
                 for distraction in distractions {
@@ -1049,8 +1066,14 @@ impl crate::capture::scheduler::SessionProcessor for LLMProcessor {
                         relative_to_absolute(window.start, window.end, &distraction.start_time);
                     let d_end =
                         relative_to_absolute(window.start, window.end, &distraction.end_time);
-                    distraction.start_time = d_start.to_rfc3339();
-                    distraction.end_time = d_end.to_rfc3339();
+                    distraction.start_time = Local
+                        .from_local_datetime(&d_start.naive_local())
+                        .unwrap()
+                        .to_rfc3339();
+                    distraction.end_time = Local
+                        .from_local_datetime(&d_end.naive_local())
+                        .unwrap()
+                        .to_rfc3339();
                 }
             }
         }
