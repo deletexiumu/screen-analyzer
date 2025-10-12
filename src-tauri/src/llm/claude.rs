@@ -17,6 +17,7 @@ use llm_json::{loads, repair_json, RepairOptions};
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
