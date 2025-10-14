@@ -144,6 +144,7 @@ pub async fn configure_llm_provider(
                 model: qwen_config.model.clone(),
                 base_url: qwen_config.base_url.clone(),
                 use_video_mode: qwen_config.use_video_mode,
+                auth_token: String::new(), // Qwen 不使用 auth_token
             }
         }
         "claude" => {
@@ -160,11 +161,24 @@ pub async fn configure_llm_provider(
                 .unwrap_or("claude-sonnet-4-5")
                 .to_string();
 
+            let auth_token = config
+                .get("auth_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let base_url = config
+                .get("base_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
             models::LLMProviderConfig {
                 api_key,
                 model,
-                base_url: String::new(), // Claude 不需要 base_url
-                use_video_mode: true,    // Claude 支持视频模式
+                base_url, // 现在支持 base_url
+                use_video_mode: true, // Claude 支持视频模式
+                auth_token, // 添加 auth_token 字段
             }
         }
         _ => {

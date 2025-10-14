@@ -106,6 +106,8 @@ fn read_claude_cli_session_token() -> Option<String> {
 pub struct ClaudeProvider {
     api_key: Option<String>,
     model: String,
+    auth_token: Option<String>,
+    base_url: Option<String>,
     db: Option<Arc<crate::storage::Database>>,
     current_session_id: Option<i64>,
     last_call_ids: Mutex<HashMap<String, i64>>,
@@ -121,6 +123,8 @@ impl ClaudeProvider {
         Self {
             api_key: None,
             model: "claude-sonnet-4-5".to_string(),
+            auth_token: None,
+            base_url: None,
             db: None,
             current_session_id: None,
             last_call_ids: Mutex::new(HashMap::new()),
@@ -518,6 +522,21 @@ impl ClaudeProvider {
                 } else {
                     warn!("Windows 下未找到 Claude CLI 会话令牌，将依赖 SDK 默认行为");
                 }
+            }
+        }
+
+        // 使用配置中的 auth_token 和 base_url（如果有的话）
+        if let Some(ref auth_token) = self.auth_token {
+            if !auth_token.is_empty() {
+                options.env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), auth_token.clone());
+                info!("使用配置的 ANTHROPIC_AUTH_TOKEN");
+            }
+        }
+
+        if let Some(ref base_url) = self.base_url {
+            if !base_url.is_empty() {
+                options.env.insert("ANTHROPIC_BASE_URL".to_string(), base_url.clone());
+                info!("使用配置的 ANTHROPIC_BASE_URL: {}", base_url);
             }
         }
 
@@ -1597,6 +1616,24 @@ Return ONLY the JSON object."#
             self.model = model.to_string();
         }
 
+        // 配置 auth_token
+        if let Some(auth_token) = config.get("auth_token").and_then(|v| v.as_str()) {
+            if auth_token.is_empty() {
+                self.auth_token = None;
+            } else {
+                self.auth_token = Some(auth_token.to_string());
+            }
+        }
+
+        // 配置 base_url
+        if let Some(base_url) = config.get("base_url").and_then(|v| v.as_str()) {
+            if base_url.is_empty() {
+                self.base_url = None;
+            } else {
+                self.base_url = Some(base_url.to_string());
+            }
+        }
+
         if self.api_key.is_none() {
             if let Ok(env_key) = std::env::var("CLAUDE_API_KEY") {
                 if !env_key.is_empty() {
@@ -1612,9 +1649,18 @@ Return ONLY the JSON object."#
             "cli-session"
         };
 
+        let auth_info = vec![
+            if self.auth_token.is_some() { "auth_token" } else { "" },
+            if self.base_url.is_some() { "base_url" } else { "" },
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+
         info!(
-            "Claude 提供商已配置: model={}, auth_mode={}",
-            self.model, auth_mode
+            "Claude 提供商已配置: model={}, auth_mode={}, additional_config={}",
+            self.model, auth_mode, auth_info
         );
         Ok(())
     }

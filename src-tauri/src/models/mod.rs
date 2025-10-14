@@ -193,6 +193,8 @@ pub struct LLMProviderConfig {
     pub base_url: String,
     /// 是否使用视频模式
     pub use_video_mode: bool,
+    /// Anthropic 认证令牌（用于替代 API Key）
+    pub auth_token: String,
 }
 
 /// UI设置
