@@ -2,7 +2,7 @@
 //
 // 用消息传递替代锁机制，消除Arc<Mutex<LLMManager>>的锁竞争
 
-use crate::llm::{LLMConfig, LLMManager, QwenConfig, SessionBrief, SessionSummary};
+use crate::llm::{CodexConfig, LLMConfig, LLMManager, QwenConfig, SessionBrief, SessionSummary};
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 
@@ -16,6 +16,12 @@ pub enum LLMCommand {
     /// 配置LLM
     Configure {
         config: QwenConfig,
+        reply: oneshot::Sender<Result<()>>,
+    },
+
+    /// 配置 Codex provider
+    ConfigureCodex {
+        config: CodexConfig,
         reply: oneshot::Sender<Result<()>>,
     },
 
@@ -121,6 +127,11 @@ impl LLMManagerActor {
             match cmd {
                 LLMCommand::Configure { config, reply } => {
                     let result = self.manager.configure(config).await;
+                    let _ = reply.send(result);
+                }
+
+                LLMCommand::ConfigureCodex { config, reply } => {
+                    let result = self.manager.configure_codex(config).await;
                     let _ = reply.send(result);
                 }
 
@@ -233,6 +244,15 @@ impl LLMHandle {
         let (reply, rx) = oneshot::channel();
         self.sender
             .send(LLMCommand::Configure { config, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
+        rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?
+    }
+
+    pub async fn configure_codex(&self, config: CodexConfig) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.sender
+            .send(LLMCommand::ConfigureCodex { config, reply })
             .await
             .map_err(|_| anyhow::anyhow!("Actor通道已关闭"))?;
         rx.await.map_err(|_| anyhow::anyhow!("Actor已停止"))?

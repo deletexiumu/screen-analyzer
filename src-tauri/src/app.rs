@@ -524,6 +524,24 @@ pub fn run() {
                                         info!("已从配置文件加载 Claude 设置");
                                     }
                                 }
+                                "codex" => {
+                                    let codex_config = llm_config
+                                        .codex_config
+                                        .clone()
+                                        .and_then(|raw| serde_json::from_value(raw).ok())
+                                        .unwrap_or_default();
+
+                                    if let Err(e) = state_clone
+                                        .analysis_domain
+                                        .get_llm_handle()
+                                        .configure_codex(codex_config)
+                                        .await
+                                    {
+                                        error!("加载 Codex 配置失败: {}", e);
+                                    } else {
+                                        info!("已从配置文件加载 Codex 设置");
+                                    }
+                                }
                                 _ => {
                                     warn!("未知的 LLM provider: {}", provider);
                                 }

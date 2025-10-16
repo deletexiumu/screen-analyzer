@@ -195,6 +195,8 @@ pub struct LLMProviderConfig {
     pub use_video_mode: bool,
     /// Anthropic 认证令牌（用于替代 API Key）
     pub auth_token: String,
+    #[serde(default)]
+    pub codex_config: Option<serde_json::Value>,
 }
 
 /// UI设置

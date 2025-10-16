@@ -78,6 +78,7 @@
             <el-radio-group v-model="settings.llm_provider">
               <el-radio value="openai">通义千问 (Qwen)</el-radio>
               <el-radio value="claude">Claude</el-radio>
+              <el-radio value="codex">Codex CLI</el-radio>
             </el-radio-group>
           </el-form-item>
 
@@ -193,6 +194,156 @@
                 测试时将直接读取环境变量 ANTHROPIC_AUTH_TOKEN 与 ANTHROPIC_BASE_URL
               </div>
             </el-form-item>
+          </template>
+
+          <!-- Codex 配置 -->
+          <template v-if="settings.llm_provider === 'codex'">
+            <div class="llm-header">
+              <h4 style="margin: 0 0 20px 0; color: #0d9488;">Codex CLI</h4>
+              <p class="form-tip" style="margin-left: 0;">
+                通过 codex exec 无头模式执行分析，请确保本机已安装并完成登录（<code>codex login</code>）。
+              </p>
+            </div>
+
+            <el-form-item label="CLI 路径">
+              <el-input
+                v-model="llmConfig.codex.binary_path"
+                placeholder="默认使用系统 PATH 中的 codex，可填入绝对路径"
+              />
+              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
+                例如 <code>C:\Users\me\.cargo\bin\codex.exe</code> 或直接填写 <code>codex</code>
+              </div>
+            </el-form-item>
+
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="模型 (可选)">
+                  <el-input
+                    v-model="llmConfig.codex.model"
+                    placeholder="如 gpt-4.1-mini，留空使用 Codex 默认模型"
+                  />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="Profile (可选)">
+                  <el-input
+                    v-model="llmConfig.codex.profile"
+                    placeholder="配置文件中的 profile 名称"
+                  />
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="Sandbox 模式">
+                  <el-select v-model="llmConfig.codex.sandbox_mode" placeholder="选择沙箱策略">
+                    <el-option value="read-only" label="read-only" />
+                    <el-option value="workspace-write" label="workspace-write" />
+                    <el-option value="danger-full-access" label="danger-full-access" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="审批策略">
+                  <el-select v-model="llmConfig.codex.approval_policy" placeholder="选择审批策略">
+                    <el-option value="on-request" label="on-request" />
+                    <el-option value="on-failure" label="on-failure" />
+                    <el-option value="untrusted" label="untrusted" />
+                    <el-option value="never" label="never" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="最大图片数">
+                  <el-input-number
+                    v-model="llmConfig.codex.max_images"
+                    :min="1"
+                    :max="60"
+                    :step="1"
+                  />
+                  <span class="form-tip">控制一次调用附带的截图数量</span>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="超时 (秒)">
+                  <el-input-number
+                    v-model="llmConfig.codex.timeout_secs"
+                    :min="60"
+                    :max="1800"
+                    :step="30"
+                  />
+                  <span class="form-tip">超过超时时间将终止 codex 进程</span>
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <el-form-item label="额外参数">
+              <el-input
+                v-model="llmConfig.codex.extra_args_text"
+                placeholder="使用空格分隔，例如 --search --full-auto"
+              />
+              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
+                会按空格拆分并传入 codex exec，例如 <code>--search --full-auto</code>
+              </div>
+            </el-form-item>
+            <el-form-item label="连接验证">
+              <el-button
+                type="primary"
+                size="small"
+                @click="testLLMAPI('codex')"
+                :loading="testingAPI"
+              >
+                测试连接
+              </el-button>
+              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
+                将触发一次 codex exec 干跑测试，请确认 codex CLI 已安装并完成登录
+              </div>
+            </el-form-item>
+
+
+            <el-collapse v-model="codexAdvancedPanels">
+              <el-collapse-item name="prompts">
+                <template #title>
+                  <span style="color: #0d9488;">高级：自定义提示词（可选）</span>
+                </template>
+                <el-form-item label="截图总结提示词">
+                  <el-input
+                    v-model="llmConfig.codex.summary_prompt"
+                    type="textarea"
+                    :rows="4"
+                    placeholder="覆盖默认截图总结提示词"
+                  />
+                </el-form-item>
+                <el-form-item label="视频分段提示词">
+                  <el-input
+                    v-model="llmConfig.codex.segment_prompt"
+                    type="textarea"
+                    :rows="4"
+                    placeholder="覆盖默认视频分段提示词"
+                  />
+                </el-form-item>
+                <el-form-item label="时间线提示词">
+                  <el-input
+                    v-model="llmConfig.codex.timeline_prompt"
+                    type="textarea"
+                    :rows="4"
+                    placeholder="覆盖默认时间线提示词"
+                  />
+                </el-form-item>
+                <el-form-item label="每日总结提示词">
+                  <el-input
+                    v-model="llmConfig.codex.day_summary_prompt"
+                    type="textarea"
+                    :rows="4"
+                    placeholder="覆盖默认每日总结提示词"
+                  />
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
           </template>
         </el-form>
       </el-tab-pane>
@@ -664,10 +815,26 @@ const logs = ref([])
 const logsContainer = ref(null)
 let unlistenLog = null
 const MAX_LOGS = 1000 // 最大日志条数
+const codexAdvancedPanels = ref([])
 
 const dialogVisible = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
+})
+
+const createDefaultCodexConfig = () => ({
+  binary_path: 'codex',
+  model: '',
+  profile: '',
+  sandbox_mode: 'workspace-write',
+  approval_policy: 'on-request',
+  extra_args_text: '',
+  max_images: 16,
+  timeout_secs: 600,
+  summary_prompt: '',
+  segment_prompt: '',
+  timeline_prompt: '',
+  day_summary_prompt: ''
 })
 
 // 设置数据
@@ -707,7 +874,8 @@ const llmConfig = reactive({
     model: 'claude-sonnet-4-5',
     auth_token: '',
     base_url: ''
-  }
+  },
+  codex: createDefaultCodexConfig()
 })
 
 // 数据库配置
@@ -759,13 +927,129 @@ const formatQuality = (value) => {
   return '最低质量'
 }
 
+const buildCodexConfigPayload = () => {
+  const payload = {}
+  const config = llmConfig.codex
+
+  const trim = (value) => (typeof value === 'string' ? value.trim() : '')
+
+  const binaryPath = trim(config.binary_path)
+  payload.binary_path = binaryPath || 'codex'
+
+  const model = trim(config.model)
+  if (model) payload.model = model
+
+  const profile = trim(config.profile)
+  if (profile) payload.profile = profile
+
+  const sandbox = trim(config.sandbox_mode)
+  payload.sandbox_mode = sandbox || 'workspace-write'
+
+  const approval = trim(config.approval_policy)
+  payload.approval_policy = approval || 'on-request'
+
+  const extraArgs = trim(config.extra_args_text)
+  if (extraArgs) {
+    const args = extraArgs.split(/\s+/).filter(Boolean)
+    if (args.length > 0) {
+      payload.extra_args = args
+    }
+  }
+
+  if (typeof config.max_images === 'number' && Number.isFinite(config.max_images) && config.max_images > 0) {
+    payload.max_images = config.max_images
+  }
+
+  if (typeof config.timeout_secs === 'number' && Number.isFinite(config.timeout_secs) && config.timeout_secs >= 60) {
+    payload.timeout_secs = config.timeout_secs
+  }
+
+  const summaryPrompt = trim(config.summary_prompt)
+  if (summaryPrompt) payload.summary_prompt = summaryPrompt
+
+  const segmentPrompt = trim(config.segment_prompt)
+  if (segmentPrompt) payload.segment_prompt = segmentPrompt
+
+  const timelinePrompt = trim(config.timeline_prompt)
+  if (timelinePrompt) payload.timeline_prompt = timelinePrompt
+
+  const daySummaryPrompt = trim(config.day_summary_prompt)
+  if (daySummaryPrompt) payload.day_summary_prompt = daySummaryPrompt
+
+  return payload
+}
+
+const buildLLMConfigPayload = (provider) => {
+  if (provider === 'codex') {
+    return buildCodexConfigPayload()
+  }
+  return JSON.parse(JSON.stringify(llmConfig[provider] || {}))
+}
+
+const applyCodexConfig = (rawConfig, fallbackModel = '') => {
+  const defaults = createDefaultCodexConfig()
+  Object.assign(llmConfig.codex, defaults)
+
+  if (!rawConfig) {
+    if (fallbackModel) {
+      llmConfig.codex.model = fallbackModel
+    }
+    return
+  }
+
+  const getString = (value, fallback = '') => {
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value.trim()
+    }
+    return fallback
+  }
+
+  llmConfig.codex.binary_path = getString(rawConfig.binary_path, defaults.binary_path)
+  llmConfig.codex.model = getString(rawConfig.model, fallbackModel || defaults.model)
+  llmConfig.codex.profile = getString(rawConfig.profile, defaults.profile)
+  llmConfig.codex.sandbox_mode = getString(rawConfig.sandbox_mode, defaults.sandbox_mode)
+  llmConfig.codex.approval_policy = getString(rawConfig.approval_policy, defaults.approval_policy)
+
+  const extraArgs = Array.isArray(rawConfig.extra_args)
+    ? rawConfig.extra_args
+    : typeof rawConfig.extra_args === 'string'
+      ? rawConfig.extra_args.split(/\s+/).filter(Boolean)
+      : []
+  llmConfig.codex.extra_args_text = extraArgs.join(' ')
+
+  if (rawConfig.max_images !== undefined && rawConfig.max_images !== null) {
+    const parsed = Number(rawConfig.max_images)
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      llmConfig.codex.max_images = parsed
+    }
+  }
+
+  if (rawConfig.timeout_secs !== undefined && rawConfig.timeout_secs !== null) {
+    const parsed = Number(rawConfig.timeout_secs)
+    if (!Number.isNaN(parsed) && parsed >= 60) {
+      llmConfig.codex.timeout_secs = parsed
+    }
+  }
+
+  llmConfig.codex.summary_prompt = getString(rawConfig.summary_prompt, '')
+  llmConfig.codex.segment_prompt = getString(rawConfig.segment_prompt, '')
+  llmConfig.codex.timeline_prompt = getString(rawConfig.timeline_prompt, '')
+  llmConfig.codex.day_summary_prompt = getString(rawConfig.day_summary_prompt, '')
+}
+
 // 测试LLM API连接
 const testLLMAPI = async (provider) => {
   testingAPI.value = true
   try {
-    const config = llmConfig[provider]
+    const config = buildLLMConfigPayload(provider)
 
     // OpenAI (Qwen) 必须提供 API Key
+    if (provider === 'codex') {
+      if (!config.binary_path || config.binary_path.trim() === '') {
+        config.binary_path = 'codex'
+      }
+    }
+
     if (provider === 'openai' && !config.api_key) {
       ElMessage.warning('请先填写API Key')
       return
@@ -1005,17 +1289,26 @@ const saveSettings = async () => {
 
     // 配置LLM提供商
     if (settings.llm_provider === 'openai') {
+      const openaiPayload = buildLLMConfigPayload('openai')
       // Qwen 配置（必须有 API key）
-      if (!llmConfig.openai.api_key || llmConfig.openai.api_key.trim() === '') {
+      if (!openaiPayload.api_key || openaiPayload.api_key.trim() === '') {
         ElMessage.warning('请填写通义千问的 API Key')
         return
       }
-      console.log('配置 Qwen:', llmConfig.openai)
-      await store.configureLLMProvider('openai', llmConfig.openai)
+      console.log('配置 Qwen:', openaiPayload)
+      await store.configureLLMProvider('openai', openaiPayload)
     } else if (settings.llm_provider === 'claude') {
+      const claudePayload = buildLLMConfigPayload('claude')
       // Claude 允许不填写 API key，会使用 CLI 凭据
-      console.log('配置 Claude:', llmConfig.claude)
-      await store.configureLLMProvider('claude', llmConfig.claude)
+      console.log('配置 Claude:', claudePayload)
+      await store.configureLLMProvider('claude', claudePayload)
+    } else if (settings.llm_provider === 'codex') {
+      const codexPayload = buildLLMConfigPayload('codex')
+      if (!codexPayload.binary_path) {
+        codexPayload.binary_path = 'codex'
+      }
+      console.log('配置 Codex:', codexPayload)
+      await store.configureLLMProvider('codex', codexPayload)
     }
 
     ElMessage.success('设置已保存，如果修改了数据库配置请重启应用')
@@ -1132,6 +1425,8 @@ const initSettings = () => {
     // 根据当前 provider 加载对应配置
     const currentProvider = settings.llm_provider || 'openai'
 
+    applyCodexConfig(llm_config.codex_config || null, llm_config.model || '')
+
     if (currentProvider === 'openai') {
       llmConfig.openai.api_key = llm_config.api_key || ''
       llmConfig.openai.model = llm_config.model || 'qwen-vl-max-latest'
@@ -1140,7 +1435,14 @@ const initSettings = () => {
       llmConfig.claude.model = llm_config.model || 'claude-sonnet-4-5'
       llmConfig.claude.auth_token = llm_config.auth_token || ''
       llmConfig.claude.base_url = llm_config.base_url || ''
+    } else if (currentProvider === 'codex') {
+      // 若后端没有返回模型信息，回退到默认值
+      if (!llmConfig.codex.model && llm_config.model) {
+        llmConfig.codex.model = llm_config.model
+      }
     }
+  } else {
+    applyCodexConfig(null)
   }
   // 加载数据库配置
   if (database_config) {

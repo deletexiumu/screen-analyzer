@@ -24,7 +24,7 @@ use tracing::{debug, error, info, warn};
 use capture::{scheduler::CaptureScheduler, ScreenCapture};
 use domains::{AnalysisDomain, CaptureDomain, StorageDomain, SystemDomain};
 use event_bus::EventBus;
-use llm::LLMManager;
+use llm::{plugin::LLMProvider, CodexProvider, LLMManager};
 use models::*;
 use settings::SettingsManager;
 use storage::{Database, StorageCleaner};
@@ -1100,6 +1100,7 @@ async fn configure_llm_provider(
                 base_url: qwen_config.base_url.clone(),
                 use_video_mode: qwen_config.use_video_mode,
                 auth_token: String::new(), // Qwen 不使用 auth_token
+                codex_config: None,
             }
         }
         "claude" => {
@@ -1142,6 +1143,30 @@ async fn configure_llm_provider(
                 base_url,
                 use_video_mode: true, // Claude 支持视频模式
                 auth_token,           // 添加 auth_token 字段
+                codex_config: None,
+            }
+        }
+        "codex" => {
+            let codex_config: llm::CodexConfig = serde_json::from_value(config.clone())
+                .map_err(|e| format!("Codex 配置解析失败: {}", e))?;
+
+            state
+                .analysis_domain
+                .get_llm_handle()
+                .configure_codex(codex_config.clone())
+                .await
+                .map_err(|e| format!("{}", e))?;
+
+            let stored = serde_json::to_value(&codex_config)
+                .map_err(|e| format!("Codex 配置序列化失败: {}", e))?;
+
+            models::LLMProviderConfig {
+                api_key: String::new(),
+                model: codex_config.model.clone().unwrap_or_default(),
+                base_url: codex_config.binary_path.clone().unwrap_or_default(),
+                use_video_mode: false,
+                auth_token: String::new(),
+                codex_config: Some(stored),
             }
         }
         _ => {
@@ -1564,6 +1589,7 @@ async fn test_llm_api(
             // 测试 Claude (使用 claude-agent-sdk)
             test_claude_sdk_api(config).await
         }
+        "codex" => test_codex_cli(config).await,
         _ => Err(format!("不支持的提供商: {}", provider)),
     };
 
@@ -1580,6 +1606,23 @@ async fn test_llm_api(
 }
 
 /// 测试OpenAI兼容的文本API
+async fn test_codex_cli(config: serde_json::Value) -> Result<String, String> {
+    let mut provider = CodexProvider::new();
+
+    provider
+        .configure(config)
+        .map_err(|e| format!("配置 Codex 失败: {}", e))?;
+
+    let prompt = "系统：你是一位诊断助手。用户：请仅回复“codex-ok”确认连接。";
+
+    let response = provider
+        .run_text_prompt(prompt, "test_connection")
+        .await
+        .map_err(|e| format!("Codex CLI 执行失败: {}", e))?;
+
+    Ok(response.trim().to_string())
+}
+
 async fn test_openai_text_api(config: serde_json::Value) -> Result<String, String> {
     use reqwest::Client;
     use serde_json::json;
@@ -2618,6 +2661,24 @@ pub fn run() {
                                         error!("加载 Claude 配置失败: {}", e);
                                     } else {
                                         info!("已从配置文件加载 Claude 设置");
+                                    }
+                                }
+                                "codex" => {
+                                    let codex_config = llm_config
+                                        .codex_config
+                                        .clone()
+                                        .and_then(|raw| serde_json::from_value(raw).ok())
+                                        .unwrap_or_default();
+
+                                    if let Err(e) = state_clone
+                                        .analysis_domain
+                                        .get_llm_handle()
+                                        .configure_codex(codex_config)
+                                        .await
+                                    {
+                                        error!("加载 Codex 配置失败: {}", e);
+                                    } else {
+                                        info!("已从配置文件加载 Codex 设置");
                                     }
                                 }
                                 _ => {

@@ -195,6 +195,32 @@ pub async fn configure_llm_provider(
                 auth_token,
             }
         }
+        "codex" => {
+            let codex_config: llm::CodexConfig = serde_json::from_value(config.clone())
+                .map_err(|e| format!("Codex 配置解析失败: {}", e))?;
+
+            state
+                .analysis_domain
+                .get_llm_handle()
+                .configure_codex(codex_config.clone())
+                .await
+                .map_err(|e| format!("{}", e))?;
+
+            let stored = serde_json::to_value(&codex_config)
+                .map_err(|e| format!("Codex 配置序列化失败: {}", e))?;
+
+            models::LLMProviderConfig {
+                api_key: String::new(),
+                model: codex_config.model.clone().unwrap_or_default(),
+                base_url: codex_config
+                    .binary_path
+                    .clone()
+                    .unwrap_or_default(),
+                use_video_mode: false,
+                auth_token: String::new(),
+                codex_config: Some(stored),
+            }
+        }
         _ => {
             return Err(format!("不支持的提供商: {}", provider));
         }

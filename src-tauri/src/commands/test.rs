@@ -6,7 +6,7 @@
 //! - OpenAI 文本 API 测试
 //! - Claude SDK API 测试
 
-use crate::AppState;
+use crate::{llm::plugin::LLMProvider, llm::CodexProvider, AppState};
 use tracing::{error, info};
 
 /// 测试截屏功能
@@ -46,6 +46,7 @@ pub async fn test_llm_api(
             // 测试 Claude (使用 claude-agent-sdk)
             test_claude_sdk_api(config).await
         }
+        "codex" => test_codex_cli(config).await,
         _ => Err(format!("不支持的提供商: {}", provider)),
     };
 
@@ -59,6 +60,23 @@ pub async fn test_llm_api(
             Err(format!("API连接失败: {}", e))
         }
     }
+async fn test_codex_cli(config: serde_json::Value) -> Result<String, String> {
+    let mut provider = CodexProvider::new();
+
+    provider
+        .configure(config)
+        .map_err(|e| format!("配置 Codex 失败: {}", e))?;
+
+    let prompt = "系统：你是一位诊断助手。用户：请仅回复“codex-ok”确认连接。";
+
+    let response = provider
+        .run_text_prompt(prompt, "test_connection")
+        .await
+        .map_err(|e| format!("Codex CLI 执行失败: {}", e))?;
+
+    Ok(response.trim().to_string())
+}
+
 }
 
 /// 测试OpenAI兼容的文本API

@@ -1,10 +1,12 @@
 // LLM模块 - 管理AI分析服务
 
 pub mod claude;
+pub mod codex;
 pub mod plugin;
 pub mod qwen;
 
 pub use claude::ClaudeProvider;
+pub use codex::CodexProvider;
 pub use plugin::{
     ActivityCategory, ActivityTag, AppSites, Distraction, KeyMoment, LLMProvider, SessionBrief,
     SessionSummary, TimelineCard, VideoSegment,
@@ -41,6 +43,9 @@ pub struct LLMConfig {
     /// Claude配置（目前无需额外配置）
     #[serde(default)]
     pub claude: ClaudeConfig,
+    /// Codex配置
+    #[serde(default)]
+    pub codex: CodexConfig,
     /// 分析参数
     pub analysis_params: AnalysisParams,
 }
@@ -54,6 +59,35 @@ fn default_provider() -> String {
 pub struct ClaudeConfig {
     pub api_key: Option<String>,
     pub model: Option<String>,
+}
+
+/// Codex配置
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct CodexConfig {
+    #[serde(default)]
+    pub binary_path: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub sandbox_mode: Option<String>,
+    #[serde(default)]
+    pub approval_policy: Option<String>,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub max_images: Option<usize>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub summary_prompt: Option<String>,
+    #[serde(default)]
+    pub segment_prompt: Option<String>,
+    #[serde(default)]
+    pub timeline_prompt: Option<String>,
+    #[serde(default)]
+    pub day_summary_prompt: Option<String>,
 }
 
 /// Qwen配置
@@ -124,6 +158,7 @@ impl LLMManager {
                     video_path: None,
                 },
                 claude: ClaudeConfig::default(),
+                codex: CodexConfig::default(),
                 analysis_params: AnalysisParams::default(),
             })),
             http_client: Some(client),
@@ -201,6 +236,9 @@ impl LLMManager {
             "claude" => {
                 self.provider = Box::new(ClaudeProvider::new());
             }
+            "codex" => {
+                self.provider = Box::new(CodexProvider::new());
+            }
             _ => {
                 return Err(anyhow!("不支持的 provider: {}", provider_name));
             }
@@ -234,6 +272,25 @@ impl LLMManager {
         Ok(())
     }
 
+    /// 配置 Codex provider
+    pub async fn configure_codex(&mut self, config: CodexConfig) -> Result<()> {
+        info!("配置 Codex provider");
+
+        let config_value = serde_json::to_value(&config)?;
+
+        if let Some(provider) = self.provider.as_any().downcast_mut::<CodexProvider>() {
+            provider.configure(config_value.clone())?;
+        } else {
+            warn!("当前 provider 不是 Codex，暂存配置待切换后生效");
+        }
+
+        let mut current_config = self.config_lock.write().await;
+        current_config.codex = config;
+
+        info!("Codex 配置已更新");
+        Ok(())
+    }
+
     pub fn set_video_path(&mut self, video_path: Option<String>) {
         if let Some(provider) = self.provider.as_any().downcast_mut::<QwenProvider>() {
             provider.set_video_path(video_path.clone());
@@ -259,7 +316,11 @@ impl LLMManager {
 
     /// 分析帧数据
     pub async fn analyze_frames(&mut self, frames: Vec<String>) -> Result<SessionSummary> {
-        info!("使用Qwen分析 {} 帧", frames.len());
+        let provider_name = {
+            let config = self.config_lock.read().await;
+            config.provider.clone()
+        };
+        info!("使用 {} 分析 {} 帧", provider_name, frames.len());
 
         match self.provider.analyze_frames(frames).await {
             Ok(summary) => {
@@ -309,6 +370,15 @@ impl LLMManager {
                 provider.set_session_id(sid);
             }
             info!("为 Claude provider 设置数据库连接");
+            return;
+        }
+        // Codex provider
+        if let Some(provider) = self.provider.as_any().downcast_mut::<CodexProvider>() {
+            provider.set_database(db.clone());
+            if let Some(sid) = session_id {
+                provider.set_session_id(sid);
+            }
+            info!("已为 Codex provider 设置数据库连接");
             return;
         }
     }
