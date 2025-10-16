@@ -235,6 +235,28 @@ async fn update_config(
     Ok(updated_config)
 }
 
+/// 读取当前进程中的 Claude 环境变量
+#[tauri::command]
+fn get_anthropic_env() -> Result<serde_json::Value, String> {
+    let auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let base_url = std::env::var("ANTHROPIC_BASE_URL")
+        .ok()
+        .filter(|v| !v.is_empty());
+
+    let fallback_token = auth_token.clone().or_else(|| {
+        std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|v| !v.is_empty())
+    });
+
+    Ok(serde_json::json!({
+        "auth_token": fallback_token,
+        "base_url": base_url
+    }))
+}
+
 /// 添加手动标签
 #[tauri::command]
 async fn add_manual_tag(
@@ -1082,12 +1104,6 @@ async fn configure_llm_provider(
         }
         "claude" => {
             // Claude (使用 claude-agent-sdk，API key 可选)
-            let api_key = config
-                .get("api_key")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
             let model = config
                 .get("model")
                 .and_then(|v| v.as_str())
@@ -1106,12 +1122,26 @@ async fn configure_llm_provider(
                 .unwrap_or("")
                 .to_string();
 
+            if !auth_token.trim().is_empty() {
+                std::env::set_var("ANTHROPIC_AUTH_TOKEN", &auth_token);
+                std::env::set_var("ANTHROPIC_API_KEY", &auth_token);
+            } else {
+                std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+                std::env::remove_var("ANTHROPIC_API_KEY");
+            }
+
+            if !base_url.trim().is_empty() {
+                std::env::set_var("ANTHROPIC_BASE_URL", &base_url);
+            } else {
+                std::env::remove_var("ANTHROPIC_BASE_URL");
+            }
+
             models::LLMProviderConfig {
-                api_key,
+                api_key: String::new(),
                 model,
-                base_url, // 现在支持 base_url
+                base_url,
                 use_video_mode: true, // Claude 支持视频模式
-                auth_token, // 添加 auth_token 字段
+                auth_token,           // 添加 auth_token 字段
             }
         }
         _ => {
@@ -1692,6 +1722,7 @@ fn read_claude_cli_session_token() -> Option<String> {
 }
 
 /// 读取 Claude CLI 的会话令牌（非 Windows 平台）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[cfg(not(target_os = "windows"))]
 fn read_claude_cli_session_token() -> Option<String> {
     // 非 Windows 平台，SDK 应该能正常工作
@@ -1712,7 +1743,43 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
     };
     use serde_json::json;
 
-    let api_key = config.get("api_key").and_then(|v| v.as_str());
+    let config_auth_token = config
+        .get("auth_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|v| !v.is_empty());
+    let config_api_key = config
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|v| !v.is_empty());
+
+    let env_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let env_api_key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+
+    let resolved_token = config_auth_token
+        .clone()
+        .or(config_api_key.clone())
+        .or(env_auth_token.clone())
+        .or(env_api_key.clone());
+
+    let resolved_base_url = config
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        });
 
     let model = config
         .get("model")
@@ -1727,13 +1794,21 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
     options.model = Some(model.to_string());
     options.include_partial_messages = true;
 
-    // 如果提供了 API key，设置环境变量
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            options
-                .env
-                .insert("ANTHROPIC_API_KEY".to_string(), key.to_string());
-        }
+    if let Some(base_url) = resolved_base_url {
+        info!("测试连接使用自定义 ANTHROPIC_BASE_URL: {}", base_url);
+        options
+            .env
+            .insert("ANTHROPIC_BASE_URL".to_string(), base_url);
+    }
+
+    // 如果提供了 token（优先环境变量），写入子进程环境
+    if let Some(token) = resolved_token {
+        info!("测试连接使用 headless 认证令牌");
+        options
+            .env
+            .insert("ANTHROPIC_AUTH_TOKEN".to_string(), token.clone());
+        // 同步设置 ANTHROPIC_API_KEY 以兼容旧版本 SDK 行为
+        options.env.insert("ANTHROPIC_API_KEY".to_string(), token);
     } else {
         // Windows 下尝试读取 Claude CLI 会话令牌
         #[cfg(target_os = "windows")]
@@ -1746,6 +1821,11 @@ async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, String
             } else {
                 warn!("Windows 下未找到 Claude CLI 会话令牌，将依赖 SDK 默认行为");
             }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            warn!("未检测到 ANTHROPIC_AUTH_TOKEN，测试将依赖 claude-agent 默认凭据");
         }
     }
 
@@ -2228,16 +2308,27 @@ pub fn run() {
             // Windows 下读取 Claude CLI 会话令牌并设置全局环境变量
             #[cfg(target_os = "windows")]
             {
-                if std::env::var("ANTHROPIC_API_KEY").is_err() {
+                let has_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN").is_ok();
+                let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
+
+                if !has_auth_token {
                     // 如果环境变量未设置，尝试从 Claude CLI 配置读取
                     if let Some(session_token) = read_claude_cli_session_token() {
+                        std::env::set_var("ANTHROPIC_AUTH_TOKEN", &session_token);
                         std::env::set_var("ANTHROPIC_API_KEY", &session_token);
-                        info!("已从 Claude CLI 配置设置全局 ANTHROPIC_API_KEY 环境变量");
+                        info!(
+                            "已从 Claude CLI 配置设置 ANTHROPIC_AUTH_TOKEN 与 ANTHROPIC_API_KEY 环境变量"
+                        );
                     } else {
                         info!("未找到 Claude CLI 会话令牌，将在需要时再次尝试读取");
                     }
+                } else if !has_api_key {
+                    if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
+                        std::env::set_var("ANTHROPIC_API_KEY", &token);
+                        info!("已将 ANTHROPIC_AUTH_TOKEN 同步至 ANTHROPIC_API_KEY 以兼容旧逻辑");
+                    }
                 } else {
-                    info!("ANTHROPIC_API_KEY 环境变量已存在");
+                    info!("ANTHROPIC_AUTH_TOKEN 环境变量已存在");
                 }
             }
 
@@ -2513,8 +2604,9 @@ pub fn run() {
                                 "claude" => {
                                     // Claude 配置
                                     let claude_config = serde_json::json!({
-                                        "api_key": llm_config.api_key,
-                                        "model": llm_config.model
+                                        "model": llm_config.model,
+                                        "auth_token": llm_config.auth_token,
+                                        "base_url": llm_config.base_url
                                     });
 
                                     if let Err(e) = state_clone
@@ -2713,6 +2805,7 @@ pub fn run() {
             get_session_detail,
             get_app_config,
             update_config,
+            get_anthropic_env,
             add_manual_tag,
             remove_tag,
             get_system_status,

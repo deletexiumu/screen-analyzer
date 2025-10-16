@@ -130,27 +130,6 @@
               <h4 style="margin: 0 0 20px 0; color: #9333EA;">Claude</h4>
             </div>
 
-            <el-form-item label="API Key">
-              <el-input
-                v-model="llmConfig.claude.api_key"
-                type="password"
-                placeholder="留空则使用 Claude CLI 登录账号"
-                show-password
-              />
-              <el-button
-                type="primary"
-                size="small"
-                @click="testLLMAPI('claude')"
-                :loading="testingAPI"
-                style="margin-left: 10px"
-              >
-                测试连接
-              </el-button>
-              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
-                使用订阅账号时可留空，应用将使用 Claude CLI 的登录凭据
-              </div>
-            </el-form-item>
-
             <el-form-item label="模型">
               <el-select
                 v-model="llmConfig.claude.model"
@@ -167,6 +146,51 @@
               </el-select>
               <div class="form-tip" style="margin-top: 8px;">
                 支持 Claude 官方模型或兼容 Claude Agent 的国内大模型（如 Kimi、GLM 等）
+              </div>
+            </el-form-item>
+
+            <el-form-item label="Auth Token">
+              <el-input
+                v-model="llmConfig.claude.auth_token"
+                type="password"
+                placeholder="ANTHROPIC_AUTH_TOKEN，留空则使用系统环境变量"
+                show-password
+              />
+              <el-button
+                type="primary"
+                link
+                style="margin-left: 10px"
+                :loading="loadingAnthropicEnv"
+                @click="loadAnthropicEnv"
+              >
+                从系统加载
+              </el-button>
+              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
+                应用将优先使用此处配置，若留空则读取系统环境变量 ANTHROPIC_AUTH_TOKEN
+              </div>
+            </el-form-item>
+
+            <el-form-item label="Base URL">
+              <el-input
+                v-model="llmConfig.claude.base_url"
+                placeholder="ANTHROPIC_BASE_URL，留空时使用默认地址"
+              />
+              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
+                可用于兼容代理或私有部署，若为空则优先读取系统环境变量 ANTHROPIC_BASE_URL
+              </div>
+            </el-form-item>
+
+            <el-form-item label="连接验证">
+              <el-button
+                type="primary"
+                size="small"
+                @click="testLLMAPI('claude')"
+                :loading="testingAPI"
+              >
+                测试连接
+              </el-button>
+              <div class="form-tip" style="margin-top: 8px; margin-left: 0;">
+                测试时将直接读取环境变量 ANTHROPIC_AUTH_TOKEN 与 ANTHROPIC_BASE_URL
               </div>
             </el-form-item>
           </template>
@@ -680,8 +704,9 @@ const llmConfig = reactive({
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
   },
   claude: {
-    api_key: '',
-    model: 'claude-sonnet-4-5'
+    model: 'claude-sonnet-4-5',
+    auth_token: '',
+    base_url: ''
   }
 })
 
@@ -712,6 +737,7 @@ const notionConfig = reactive({
 })
 
 const testingNotion = ref(false)
+const loadingAnthropicEnv = ref(false)
 const notionPages = ref([])
 const searchingNotionPages = ref(false)
 const selectedPageForDatabase = computed(() => {
@@ -745,11 +771,6 @@ const testLLMAPI = async (provider) => {
       return
     }
 
-    // Claude 可选 API Key（可以使用 CLI 登录凭据）
-    if (provider === 'claude' && !config.api_key) {
-      ElMessage.info('将使用 Claude CLI 登录凭据进行测试')
-    }
-
     const result = await invoke('test_llm_api', {
       provider,
       config
@@ -764,6 +785,26 @@ const testLLMAPI = async (provider) => {
     ElMessage.error('API测试失败: ' + error)
   } finally {
     testingAPI.value = false
+  }
+}
+
+// 从系统环境变量加载 Claude 配置
+const loadAnthropicEnv = async () => {
+  loadingAnthropicEnv.value = true
+  try {
+    const envConfig = await invoke('get_anthropic_env')
+    if (envConfig) {
+      const { auth_token = '', base_url = '' } = envConfig
+      llmConfig.claude.auth_token = auth_token || ''
+      llmConfig.claude.base_url = base_url || ''
+      ElMessage.success('已加载系统环境变量')
+    } else {
+      ElMessage.info('未检测到相关环境变量')
+    }
+  } catch (error) {
+    ElMessage.error('加载环境变量失败: ' + error)
+  } finally {
+    loadingAnthropicEnv.value = false
   }
 }
 
@@ -1096,8 +1137,9 @@ const initSettings = () => {
       llmConfig.openai.model = llm_config.model || 'qwen-vl-max-latest'
       llmConfig.openai.base_url = llm_config.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
     } else if (currentProvider === 'claude') {
-      llmConfig.claude.api_key = llm_config.api_key || ''
       llmConfig.claude.model = llm_config.model || 'claude-sonnet-4-5'
+      llmConfig.claude.auth_token = llm_config.auth_token || ''
+      llmConfig.claude.base_url = llm_config.base_url || ''
     }
   }
   // 加载数据库配置

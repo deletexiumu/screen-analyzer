@@ -17,13 +17,14 @@ use llm_json::{loads, repair_json, RepairOptions};
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "windows")]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 /// 读取 Claude CLI 的会话令牌（Windows 平台）
 #[cfg(target_os = "windows")]
-fn read_claude_cli_session_token() -> Option<String> {
+pub(crate) fn read_claude_cli_session_token() -> Option<String> {
     use std::fs;
 
     // 尝试多个可能的配置路径
@@ -96,8 +97,9 @@ fn read_claude_cli_session_token() -> Option<String> {
 }
 
 /// 读取 Claude CLI 的会话令牌（非 Windows 平台）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[cfg(not(target_os = "windows"))]
-fn read_claude_cli_session_token() -> Option<String> {
+pub(crate) fn read_claude_cli_session_token() -> Option<String> {
     // 非 Windows 平台，SDK 应该能正常工作
     None
 }
@@ -528,14 +530,18 @@ impl ClaudeProvider {
         // 使用配置中的 auth_token 和 base_url（如果有的话）
         if let Some(ref auth_token) = self.auth_token {
             if !auth_token.is_empty() {
-                options.env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), auth_token.clone());
+                options
+                    .env
+                    .insert("ANTHROPIC_AUTH_TOKEN".to_string(), auth_token.clone());
                 info!("使用配置的 ANTHROPIC_AUTH_TOKEN");
             }
         }
 
         if let Some(ref base_url) = self.base_url {
             if !base_url.is_empty() {
-                options.env.insert("ANTHROPIC_BASE_URL".to_string(), base_url.clone());
+                options
+                    .env
+                    .insert("ANTHROPIC_BASE_URL".to_string(), base_url.clone());
                 info!("使用配置的 ANTHROPIC_BASE_URL: {}", base_url);
             }
         }
@@ -732,7 +738,10 @@ impl ClaudeProvider {
         // 1. 首先尝试提取代码块（最优先，避免误提取）
         if let Some(block) = Self::extract_first_code_block(normalized.as_ref()) {
             debug!("extract_json: 提取到代码块，长度 {} 字节", block.len());
-            debug!("extract_json: 代码块前50字符: {:?}", block.chars().take(50).collect::<String>());
+            debug!(
+                "extract_json: 代码块前50字符: {:?}",
+                block.chars().take(50).collect::<String>()
+            );
             if let Some(value) = Self::parse_json_candidate(&block) {
                 debug!("extract_json: 成功从代码块解析 JSON");
                 return Ok(value);
@@ -751,8 +760,14 @@ impl ClaudeProvider {
 
         // 3. 最后尝试提取括号内容（可能不准确）
         if let Some(candidate) = Self::extract_outer_json(normalized.as_ref()) {
-            debug!("extract_json: 尝试从括号内容解析 JSON，长度 {}", candidate.len());
-            debug!("extract_json: 括号内容前50字符: {:?}", candidate.chars().take(50).collect::<String>());
+            debug!(
+                "extract_json: 尝试从括号内容解析 JSON，长度 {}",
+                candidate.len()
+            );
+            debug!(
+                "extract_json: 括号内容前50字符: {:?}",
+                candidate.chars().take(50).collect::<String>()
+            );
             if let Some(value) = Self::parse_json_candidate(&candidate) {
                 debug!("extract_json: 成功从括号内容解析 JSON");
                 return Ok(value);
@@ -782,16 +797,21 @@ impl ClaudeProvider {
                 continue;
             }
 
-            debug!("parse_json_candidate: 尝试候选 {} (长度 {})", idx, candidate.len());
+            debug!(
+                "parse_json_candidate: 尝试候选 {} (长度 {})",
+                idx,
+                candidate.len()
+            );
 
             // 1. 直接解析（最优先，最可靠）
             match serde_json::from_str::<serde_json::Value>(candidate) {
                 Ok(value) => {
-                    debug!("parse_json_candidate: 直接解析成功, 类型: {}",
+                    debug!(
+                        "parse_json_candidate: 直接解析成功, 类型: {}",
                         match &value {
                             serde_json::Value::Array(_) => "Array",
                             serde_json::Value::Object(_) => "Object",
-                            _ => "Other"
+                            _ => "Other",
                         }
                     );
                     return Some(value);
@@ -830,15 +850,16 @@ impl ClaudeProvider {
                             // 如果原始字符串以 { 开头，结果应该是对象
                             candidate.trim_start().starts_with('{')
                         }
-                        _ => true
+                        _ => true,
                     };
 
                     if is_reasonable {
-                        debug!("parse_json_candidate: llm_json::loads 修复成功, 类型: {}",
+                        debug!(
+                            "parse_json_candidate: llm_json::loads 修复成功, 类型: {}",
                             match &value {
                                 serde_json::Value::Array(_) => "Array",
                                 serde_json::Value::Object(_) => "Object",
-                                _ => "Other"
+                                _ => "Other",
                             }
                         );
                         return Some(value);
@@ -852,23 +873,30 @@ impl ClaudeProvider {
             // 4. 尝试 repair_json
             match repair_json(candidate, &options) {
                 Ok(repaired) => {
-                    debug!("parse_json_candidate: repair_json 生成的内容前100字符: {:?}",
-                        repaired.chars().take(100).collect::<String>());
+                    debug!(
+                        "parse_json_candidate: repair_json 生成的内容前100字符: {:?}",
+                        repaired.chars().take(100).collect::<String>()
+                    );
                     match serde_json::from_str::<serde_json::Value>(&repaired) {
                         Ok(value) => {
                             // 同样验证合理性
                             let is_reasonable = match &value {
-                                serde_json::Value::Array(_) => candidate.trim_start().starts_with('['),
-                                serde_json::Value::Object(_) => candidate.trim_start().starts_with('{'),
-                                _ => true
+                                serde_json::Value::Array(_) => {
+                                    candidate.trim_start().starts_with('[')
+                                }
+                                serde_json::Value::Object(_) => {
+                                    candidate.trim_start().starts_with('{')
+                                }
+                                _ => true,
                             };
 
                             if is_reasonable {
-                                debug!("parse_json_candidate: repair_json 修复成功, 类型: {}",
+                                debug!(
+                                    "parse_json_candidate: repair_json 修复成功, 类型: {}",
                                     match &value {
                                         serde_json::Value::Array(_) => "Array",
                                         serde_json::Value::Object(_) => "Object",
-                                        _ => "Other"
+                                        _ => "Other",
                                     }
                                 );
                                 return Some(value);
@@ -893,27 +921,43 @@ impl ClaudeProvider {
             let start_marker = search_start + start_marker;
             let after_marker = &input[start_marker + 3..];
 
-            debug!("extract_first_code_block: 找到代码块开始标记，位置 {}", start_marker);
-            debug!("extract_first_code_block: 标记后内容前30字符: {:?}",
-                after_marker.chars().take(30).collect::<String>());
+            debug!(
+                "extract_first_code_block: 找到代码块开始标记，位置 {}",
+                start_marker
+            );
+            debug!(
+                "extract_first_code_block: 标记后内容前30字符: {:?}",
+                after_marker.chars().take(30).collect::<String>()
+            );
 
             let content_start_offset = after_marker.find('\n').map(|pos| pos + 1).unwrap_or(0);
             let content_start = start_marker + 3 + content_start_offset;
 
-            debug!("extract_first_code_block: 内容开始位置: {}, 偏移: {}", content_start, content_start_offset);
+            debug!(
+                "extract_first_code_block: 内容开始位置: {}, 偏移: {}",
+                content_start, content_start_offset
+            );
 
             if let Some(end_relative) = input[content_start..].find("```") {
                 let content_end = content_start + end_relative;
                 let block = input[content_start..content_end].trim();
 
-                debug!("extract_first_code_block: 提取的代码块长度: {}", block.len());
-                debug!("extract_first_code_block: 代码块前50字符: {:?}",
-                    block.chars().take(50).collect::<String>());
+                debug!(
+                    "extract_first_code_block: 提取的代码块长度: {}",
+                    block.len()
+                );
+                debug!(
+                    "extract_first_code_block: 代码块前50字符: {:?}",
+                    block.chars().take(50).collect::<String>()
+                );
 
                 let stripped = Self::strip_language_marker(block);
 
                 if stripped != block {
-                    debug!("extract_first_code_block: 移除语言标记后长度: {}", stripped.len());
+                    debug!(
+                        "extract_first_code_block: 移除语言标记后长度: {}",
+                        stripped.len()
+                    );
                 }
 
                 return Some(stripped.to_string());
@@ -1604,54 +1648,97 @@ Return ONLY the JSON object."#
     }
 
     fn configure(&mut self, config: serde_json::Value) -> Result<()> {
-        if let Some(api_key) = config.get("api_key").and_then(|v| v.as_str()) {
-            if api_key.is_empty() {
-                self.api_key = None;
-            } else {
-                self.api_key = Some(api_key.to_string());
-            }
-        }
+        self.api_key = None;
+        self.auth_token = None;
+        self.base_url = None;
 
         if let Some(model) = config.get("model").and_then(|v| v.as_str()) {
             self.model = model.to_string();
         }
 
-        // 配置 auth_token
-        if let Some(auth_token) = config.get("auth_token").and_then(|v| v.as_str()) {
-            if auth_token.is_empty() {
-                self.auth_token = None;
-            } else {
-                self.auth_token = Some(auth_token.to_string());
+        let config_auth_token = config
+            .get("auth_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let config_api_key = config
+            .get("api_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let env_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let env_api_key = std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
+        let mut token_source: Option<String> = None;
+        let resolved_token = if let Some(token) = config_auth_token.clone() {
+            token_source = Some("config:auth_token".to_string());
+            Some(token)
+        } else if let Some(token) = config_api_key.clone() {
+            token_source = Some("config:api_key".to_string());
+            Some(token)
+        } else if let Some(token) = env_auth_token.clone() {
+            token_source = Some("env:ANTHROPIC_AUTH_TOKEN".to_string());
+            Some(token)
+        } else if let Some(token) = env_api_key.clone() {
+            token_source = Some("env:ANTHROPIC_API_KEY".to_string());
+            Some(token)
+        } else {
+            None
+        };
+
+        if let Some(token) = resolved_token {
+            self.auth_token = Some(token.clone());
+            self.api_key = Some(token);
+            if let Some(source) = &token_source {
+                info!("Claude 使用 {} 提供认证", source);
             }
+        } else {
+            warn!("未检测到 ANTHROPIC_AUTH_TOKEN，将尝试使用 CLI 会话或默认配置");
         }
 
-        // 配置 base_url
-        if let Some(base_url) = config.get("base_url").and_then(|v| v.as_str()) {
-            if base_url.is_empty() {
-                self.base_url = None;
-            } else {
-                self.base_url = Some(base_url.to_string());
-            }
+        let mut base_url_source: Option<String> = None;
+        if let Some(base_url) = config
+            .get("base_url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
+            base_url_source = Some("config:base_url".to_string());
+            info!(
+                "Claude 使用自定义 ANTHROPIC_BASE_URL: {} (来源: {})",
+                base_url,
+                base_url_source.as_deref().unwrap_or("config")
+            );
+            self.base_url = Some(base_url);
+        } else if let Some(base_url) = std::env::var("ANTHROPIC_BASE_URL")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
+            base_url_source = Some("env:ANTHROPIC_BASE_URL".to_string());
+            info!(
+                "Claude 使用自定义 ANTHROPIC_BASE_URL: {} (来源: {})",
+                base_url,
+                base_url_source.as_deref().unwrap_or("env")
+            );
+            self.base_url = Some(base_url);
         }
 
-        if self.api_key.is_none() {
-            if let Ok(env_key) = std::env::var("CLAUDE_API_KEY") {
-                if !env_key.is_empty() {
-                    self.api_key = Some(env_key);
-                    info!("Claude 使用环境变量 CLAUDE_API_KEY 作为凭据");
-                }
-            }
-        }
-
-        let auth_mode = if self.api_key.is_some() {
-            "direct-key"
+        let auth_mode = if self.auth_token.is_some() {
+            "headless-token"
         } else {
             "cli-session"
         };
 
         let auth_info = vec![
-            if self.auth_token.is_some() { "auth_token" } else { "" },
-            if self.base_url.is_some() { "base_url" } else { "" },
+            token_source.as_deref().unwrap_or(""),
+            base_url_source.as_deref().unwrap_or(""),
         ]
         .into_iter()
         .filter(|s| !s.is_empty())
@@ -1717,7 +1804,11 @@ mod tests {
         assert!(result.is_ok(), "JSON 解析应该成功");
 
         let json_value = result.unwrap();
-        assert!(json_value.is_array(), "解析结果应该是数组，实际是: {:?}", json_value);
+        assert!(
+            json_value.is_array(),
+            "解析结果应该是数组，实际是: {:?}",
+            json_value
+        );
 
         let array = json_value.as_array().unwrap();
         assert_eq!(array.len(), 1, "数组应该包含1个元素");
@@ -1734,16 +1825,33 @@ mod tests {
 
         // 打印所有引号字符的 Unicode 码点
         for (i, ch) in normalized.chars().enumerate() {
-            if ch == '"' || ch == '\u{201c}' || ch == '\u{201d}' || ch == '\u{300c}' || ch == '\u{300d}' {
+            if ch == '"'
+                || ch == '\u{201c}'
+                || ch == '\u{201d}'
+                || ch == '\u{300c}'
+                || ch == '\u{300d}'
+            {
                 println!("位置 {}: 字符 '{}' (U+{:04X})", i, ch, ch as u32);
             }
         }
 
         // 应该不包含中文引号
-        assert!(!normalized.contains('\u{300c}'), "不应包含 LEFT CORNER BRACKET");
-        assert!(!normalized.contains('\u{300d}'), "不应包含 RIGHT CORNER BRACKET");
-        assert!(!normalized.contains('\u{201c}'), "不应包含 LEFT DOUBLE QUOTATION MARK");
-        assert!(!normalized.contains('\u{201d}'), "不应包含 RIGHT DOUBLE QUOTATION MARK");
+        assert!(
+            !normalized.contains('\u{300c}'),
+            "不应包含 LEFT CORNER BRACKET"
+        );
+        assert!(
+            !normalized.contains('\u{300d}'),
+            "不应包含 RIGHT CORNER BRACKET"
+        );
+        assert!(
+            !normalized.contains('\u{201c}'),
+            "不应包含 LEFT DOUBLE QUOTATION MARK"
+        );
+        assert!(
+            !normalized.contains('\u{201d}'),
+            "不应包含 RIGHT DOUBLE QUOTATION MARK"
+        );
 
         // 应该包含标准 ASCII 双引号 (U+0022)
         assert!(normalized.contains('"'), "应该包含标准双引号");
@@ -1770,7 +1878,11 @@ mod tests {
 ```"#;
 
         let result = ClaudeProvider::extract_json(response);
-        assert!(result.is_ok(), "有效的 JSON 数组应该能被解析: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "有效的 JSON 数组应该能被解析: {:?}",
+            result.err()
+        );
 
         let json_value = result.unwrap();
         assert!(json_value.is_array(), "解析结果应该是数组，而不是对象");

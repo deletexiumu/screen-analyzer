@@ -508,8 +508,9 @@ pub fn run() {
                                 "claude" => {
                                     // Claude 配置
                                     let claude_config = serde_json::json!({
-                                        "api_key": llm_config.api_key,
-                                        "model": llm_config.model
+                                        "model": llm_config.model,
+                                        "auth_token": llm_config.auth_token,
+                                        "base_url": llm_config.base_url
                                     });
 
                                     if let Err(e) = state_clone

@@ -173,12 +173,26 @@ pub async fn configure_llm_provider(
                 .unwrap_or("")
                 .to_string();
 
+            if !auth_token.trim().is_empty() {
+                std::env::set_var("ANTHROPIC_AUTH_TOKEN", &auth_token);
+                std::env::set_var("ANTHROPIC_API_KEY", &auth_token);
+            } else {
+                std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+                std::env::remove_var("ANTHROPIC_API_KEY");
+            }
+
+            if !base_url.trim().is_empty() {
+                std::env::set_var("ANTHROPIC_BASE_URL", &base_url);
+            } else {
+                std::env::remove_var("ANTHROPIC_BASE_URL");
+            }
+
             models::LLMProviderConfig {
                 api_key,
                 model,
-                base_url, // 现在支持 base_url
+                base_url,
                 use_video_mode: true, // Claude 支持视频模式
-                auth_token, // 添加 auth_token 字段
+                auth_token,
             }
         }
         _ => {

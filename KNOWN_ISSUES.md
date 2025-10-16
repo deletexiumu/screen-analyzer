@@ -42,7 +42,7 @@
 - `src-tauri/src/llm/claude.rs:call_claude_api()` - 实际调用
 
 我们已经尝试的解决方案：
-- ✅ 在应用启动时设置全局 `ANTHROPIC_API_KEY` 环境变量
+- ✅ 在应用启动时设置全局 `ANTHROPIC_AUTH_TOKEN` 环境变量（并同步 `ANTHROPIC_API_KEY` 以兼容旧版 SDK）
 - ❌ 无法直接控制 `claude-agent-sdk` 创建进程的方式（外部库）
 - ⏳ 已提交 Issue 到上游项目
 

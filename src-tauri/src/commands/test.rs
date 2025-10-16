@@ -139,7 +139,43 @@ pub async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, St
     };
     use serde_json::json;
 
-    let api_key = config.get("api_key").and_then(|v| v.as_str());
+    let config_auth_token = config
+        .get("auth_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|v| !v.is_empty());
+    let config_api_key = config
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|v| !v.is_empty());
+
+    let env_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let env_api_key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+
+    let resolved_token = config_auth_token
+        .clone()
+        .or(config_api_key.clone())
+        .or(env_auth_token.clone())
+        .or(env_api_key.clone());
+
+    let resolved_base_url = config
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        });
 
     let model = config
         .get("model")
@@ -154,12 +190,37 @@ pub async fn test_claude_sdk_api(config: serde_json::Value) -> Result<String, St
     options.model = Some(model.to_string());
     options.include_partial_messages = true;
 
-    // 如果提供了 API key，设置环境变量
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            options
-                .env
-                .insert("ANTHROPIC_API_KEY".to_string(), key.to_string());
+    if let Some(base_url) = resolved_base_url {
+        info!("测试连接使用自定义 ANTHROPIC_BASE_URL: {}", base_url);
+        options
+            .env
+            .insert("ANTHROPIC_BASE_URL".to_string(), base_url);
+    }
+
+    if let Some(token) = resolved_token {
+        info!("测试连接使用 headless 认证令牌");
+        options
+            .env
+            .insert("ANTHROPIC_AUTH_TOKEN".to_string(), token.clone());
+        options
+            .env
+            .insert("ANTHROPIC_API_KEY".to_string(), token);
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(session_token) = crate::llm::claude::read_claude_cli_session_token() {
+                info!("使用 Claude CLI 会话令牌");
+                options
+                    .env
+                    .insert("ANTHROPIC_API_KEY".to_string(), session_token);
+            } else {
+                info!("未检测到 CLI 会话令牌，将依赖 SDK 默认行为");
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            info!("未检测到 ANTHROPIC_AUTH_TOKEN，将依赖 claude-agent 默认凭据");
         }
     }
 
