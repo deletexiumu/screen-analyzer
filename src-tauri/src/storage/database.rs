@@ -117,6 +117,10 @@ impl Database {
         self.repository.delete_session(session_id).await
     }
 
+    pub async fn get_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<Vec<Session>> {
+        self.repository.get_old_sessions(cutoff_date).await
+    }
+
     pub async fn delete_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<u64> {
         self.repository.delete_old_sessions(cutoff_date).await
     }

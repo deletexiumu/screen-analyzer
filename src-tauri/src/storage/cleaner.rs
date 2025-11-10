@@ -111,17 +111,41 @@ impl StorageCleaner {
 
     /// 获取要删除的会话及其文件信息
     /// 获取旧会话及其关联的文件路径
-    ///
-    /// TODO: 实现完整的旧会话查询逻辑
-    /// 预计在 v1.2 版本实现
-    #[allow(unused)]
     async fn get_old_sessions_with_files(
         &self,
         cutoff_date: &chrono::DateTime<Utc>,
     ) -> Result<Vec<SessionFiles>> {
-        // 这里应该从数据库获取要删除的会话的文件路径
-        // 为了简化，暂时返回空列表
-        Ok(vec![])
+        // 1. 查询所有过期会话
+        let old_sessions = self.db.get_old_sessions(*cutoff_date).await?;
+
+        let mut session_files = Vec::new();
+
+        // 2. 对每个会话，获取其关联的文件路径
+        for session in old_sessions {
+            let session_id = match session.id {
+                Some(id) => id,
+                None => {
+                    error!("会话缺少 ID，跳过");
+                    continue;
+                }
+            };
+
+            // 3. 获取所有帧文件路径
+            let frames = self.db.get_frames_by_session(session_id).await?;
+            let frame_paths: Vec<String> = frames.iter().map(|f| f.file_path.clone()).collect();
+
+            // 4. 获取视频文件路径
+            let video_path = session.video_path.clone();
+
+            // 5. 添加到结果列表
+            session_files.push(SessionFiles {
+                frame_paths,
+                video_path,
+            });
+        }
+
+        info!("找到 {} 个过期会话，准备清理相关文件", session_files.len());
+        Ok(session_files)
     }
 
     /// 清理文件，返回失败列表
@@ -249,9 +273,9 @@ impl StorageCleaner {
 }
 
 /// 会话文件信息
-struct SessionFiles {
-    frame_paths: Vec<String>,
-    video_path: Option<String>,
+pub struct SessionFiles {
+    pub frame_paths: Vec<String>,
+    pub video_path: Option<String>,
 }
 
 /// 清理结果

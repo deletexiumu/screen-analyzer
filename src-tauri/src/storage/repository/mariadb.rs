@@ -343,6 +343,19 @@ impl DatabaseRepository for MariaDbRepository {
         Ok(())
     }
 
+    async fn get_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<Vec<Session>> {
+        let sessions = sqlx::query_as::<_, Session>(
+            "SELECT id, start_time, end_time, title, summary, video_path, tags, created_at, device_name, device_type
+             FROM sessions
+             WHERE start_time < ?"
+        )
+        .bind(cutoff_date)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(sessions)
+    }
+
     async fn delete_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<u64> {
         let result = sqlx::query("DELETE FROM sessions WHERE start_time < ?")
             .bind(cutoff_date)

@@ -53,6 +53,9 @@ pub trait DatabaseRepository: Send + Sync {
     /// 删除会话
     async fn delete_session(&self, session_id: i64) -> Result<()>;
 
+    /// 获取过期会话（用于清理前获取文件路径）
+    async fn get_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<Vec<Session>>;
+
     /// 删除过期会话
     async fn delete_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<u64>;
 
