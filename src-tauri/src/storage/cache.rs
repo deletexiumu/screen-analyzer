@@ -226,6 +226,11 @@ impl DatabaseRepository for CachedRepository {
         Ok(())
     }
 
+    async fn get_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<Vec<Session>> {
+        // 不缓存，直接查询数据库（用于清理操作）
+        self.inner.get_old_sessions(cutoff_date).await
+    }
+
     async fn delete_old_sessions(&self, cutoff_date: DateTime<Utc>) -> Result<u64> {
         let count = self.inner.delete_old_sessions(cutoff_date).await?;
         self.clear_cache().await;
